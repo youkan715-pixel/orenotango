@@ -72,6 +72,12 @@ button.ja .ipa{display:block;padding:3px 8px 0;color:var(--sub);font-size:13px;f
 /* 例文と読み上げボタンは最初から見せる。日→英のときだけ、例文の文字は答えを開くまで隠す（音は聞ける）。 */
 .ex{grid-column:1/-1;padding:0 14px 12px}
 li.row.rv:not(.open) .ex p{display:none}
+/* 「例文：オフ」のときは、答えを開いたカードだけ例文とボタンを出す */
+.ex-off li.row:not(.open) .ex{display:none}
+/* そのあいだも単語の音だけは聞けるよう、単語の横に小さな読み上げボタンを出す */
+.say.mini{display:none;border:0;background:transparent;padding:4px 6px;margin-left:2px;font-size:16px;min-height:32px;vertical-align:middle}
+.ex-off li.row:not(.open) .say.mini{display:inline-block}
+.no-speech .say.mini{display:none!important}
 .ex button{margin-bottom:4px}
 .ex p{margin:0 0 8px;font-size:15px}
 .ex button{border:1px solid var(--line);background:var(--bg);border-radius:8px;min-height:36px;padding:4px 12px;margin-right:6px;font-size:14px}
@@ -122,6 +128,7 @@ dialog textarea{min-height:72px;resize:vertical}
     </div>
     <div class="tools">
       <button class="btn" id="dirBtn" aria-pressed="false">英→日</button>
+      <button class="btn" id="exBtn"></button>
       <button class="btn" id="accentBtn"></button>
       <button class="btn" id="onlyTodo" aria-pressed="false">未習得のみ</button>
       <button class="btn" id="shuffle" aria-pressed="false">シャッフル</button>
@@ -499,13 +506,14 @@ function rowHtml(it){
   if (it.dup) badges += '<span class="badge">' + esc(it.dup) + '回登場</span>';
   const orig = it.orig ? '<small>メモのつづり：' + esc(it.orig) + '</small>' : '';
   const ipa = ipaOf(it), ipaHtml = ipa ? '<small class="ipa">' + esc(ipa) + '</small>' : '';
+  const mini = '<button type="button" class="say mini" data-say="w" aria-label="単語を読み上げ">🔊</button>';
   let q, a;
   if (rev){
     const [hint, rest] = hintSplit(it);
-    q = '<div class="en q-ja">' + esc(it.ja) + badges + '</div>';
+    q = '<div class="en q-ja">' + esc(it.ja) + badges + mini + '</div>';
     a = '<span><i class="hint">' + esc(hint) + '</i><i class="rest">' + esc(rest) + '</i></span>' + ipaHtml + orig;
   } else {
-    q = '<div class="en">' + esc(it.en) + badges + orig + '</div>';
+    q = '<div class="en">' + esc(it.en) + badges + mini + orig + '</div>';
     a = '<span>' + esc(it.ja) + '</span>' + ipaHtml;
   }
   const ex = it.ex || EX[it.id] || '';
@@ -533,6 +541,10 @@ function render(){
   $('dirBtn').setAttribute('aria-pressed', dir === 'ja');
   $('dirBtn').textContent = dir === 'ja' ? '日→英' : '英→日';
   $('accentBtn').textContent = '発音：' + ACCENTS[accent()][0];
+  const exOn = pref('ex', 'on') === 'on';
+  $('exBtn').textContent = '例文：' + (exOn ? 'オン' : 'オフ');
+  $('exBtn').setAttribute('aria-pressed', exOn);
+  document.documentElement.classList.toggle('ex-off', !exOn);
   $('shuffle').setAttribute('aria-pressed', !!order);
 
   const vis = visible(all);
@@ -730,6 +742,7 @@ $('importFile').addEventListener('change', async e => {
 
 $('voiceBtn').hidden = !canSpeak;
 $('voiceBtn').addEventListener('click', () => { fillVoices(); $('voiceDlg').showModal(); });
+$('exBtn').addEventListener('click', () => { setPref('ex', pref('ex', 'on') === 'on' ? 'off' : 'on'); render(); });
 $('accentBtn').hidden = !canSpeak;
 $('accentBtn').addEventListener('click', () => {
   const keys = Object.keys(ACCENTS);
