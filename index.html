@@ -23,7 +23,7 @@
 /* 長文ページ */
 #reading{display:none}
 .reading #reading{display:block}
-.reading .tools,.reading #progress,.reading #list,.reading #addBtn{display:none}
+.reading .tools,.reading .pbar,.reading #list,.reading #addBtn{display:none}
 .rcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px}
 .rcard h2{margin:0 0 10px;font-size:17px}
 .rcard h3{margin:14px 0 6px;font-size:14px;color:var(--sub);font-weight:600}
@@ -34,6 +34,10 @@
 .rtext{font-size:17px;line-height:1.75;margin:0}
 .rja{margin:10px 0 0;color:var(--sub);font-size:15px;line-height:1.7}
 .hw{border:0;padding:0 2px;margin:0;background:color-mix(in srgb,var(--accent) 16%,transparent);color:inherit;border-radius:4px;font-weight:600}
+.sent{cursor:pointer;border-radius:4px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.sent.cur{background:color-mix(in srgb,var(--accent) 22%,transparent)}
+.player input[type=range]{width:100%;margin:14px 0 2px;accent-color:var(--accent);height:28px}
+.player .note{margin:0}
 .rtip{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:15px}
 .rtip:empty{display:none}
 fieldset.q{border:0;padding:0;margin:14px 0 0;min-width:0}
@@ -70,7 +74,18 @@ header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px so
 .btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 .btn.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}
 .btn.danger{color:var(--warn);border-color:var(--warn)}
-.progress{margin-top:6px;font-size:13px;color:var(--sub);font-variant-numeric:tabular-nums}
+.progress{font-size:13px;color:var(--sub);font-variant-numeric:tabular-nums;flex:1;min-width:0}
+.pbar{display:flex;align-items:center;gap:6px;margin-top:6px}
+.btn.sm{min-height:34px;padding:4px 10px;font-size:13px}
+/* 絞り込みを畳んだとき */
+.tools-off .tools{display:none}
+/* しおり：単語の横の印。挟んだカードは左に色の帯が付く */
+.mark{border:0;background:transparent;padding:4px;margin-left:2px;font-size:14px;min-height:32px;vertical-align:middle;opacity:.2}
+li.row.marked .mark{opacity:1}
+li.row.marked{box-shadow:inset 5px 0 0 var(--accent)}
+li.row.flash{animation:flash 1.2s ease-out}
+@keyframes flash{from{background:color-mix(in srgb,var(--accent) 30%,transparent)}to{background:transparent}}
+@media (prefers-reduced-motion: reduce){li.row.flash{animation:none}}
 main{padding:10px 12px 110px}
 details.group{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
 details.group>summary{padding:10px 14px;font-weight:700;cursor:pointer;display:flex;justify-content:space-between;gap:8px;list-style:none}
@@ -165,7 +180,9 @@ dialog textarea{min-height:72px;resize:vertical}
       <button class="btn" id="showAll">全部見せる</button>
       <button class="btn" id="hideAll">全部隠す</button>
     </div>
-    <div class="progress" id="progress"></div>
+    <div class="pbar"><span class="progress" id="progress"></span>
+      <button class="btn sm" id="markBtn" hidden>🔖 しおりへ</button>
+      <button class="btn sm" id="foldBtn"></button></div>
   </div>
 </header>
 
@@ -270,7 +287,7 @@ const BASE = {
 };
 
 /* ---------- 保存データ（この端末の中） ---------- */
-function blank(){ return {learned:{}, custom:[], edits:{}, deleted:{}, reading:{}}; }
+function blank(){ return {learned:{}, custom:[], edits:{}, deleted:{}, reading:{}, marks:{}}; }
 function load(){
   try { return Object.assign(blank(), JSON.parse(localStorage.getItem(KEY)) || {}); }
   catch(e){ return blank(); }
@@ -329,17 +346,6 @@ function makeUtter(text){
 function speak(text){
   if (!canSpeak || !text) return;
   speechSynthesis.cancel(); speechSynthesis.speak(makeUtter(text));
-}
-// 長文は1文ずつ順に読む（長い文章を一度に渡すと途中で止まるブラウザがあるため）
-function speakLong(text, onEnd){
-  if (!canSpeak || !text) return;
-  speechSynthesis.cancel();
-  const parts = text.match(/[^.!?]+[.!?]+["']?\s*/g) || [text];
-  parts.forEach((t, i) => {
-    const u = makeUtter(t.trim());
-    if (i === parts.length - 1) u.onend = onEnd;
-    speechSynthesis.speak(u);
-  });
 }
 function fillVoices(){
   const vs = englishVoices(), want = pref('voice', '');
@@ -558,13 +564,15 @@ function rowHtml(it){
   const orig = it.orig ? '<small>メモのつづり：' + esc(it.orig) + '</small>' : '';
   const ipa = ipaOf(it), ipaHtml = ipa ? '<small class="ipa">' + esc(ipa) + '</small>' : '';
   const mini = '<button type="button" class="say mini" data-say="w" aria-label="単語を読み上げ">🔊</button>';
+  const marked = (state.marks || {})[page] === it.id;
+  const mark = '<button type="button" class="mark" aria-pressed="' + marked + '" aria-label="ここにしおりを挟む" title="ここにしおりを挟む">🔖</button>';
   let q, a;
   if (rev){
     const [hint, rest] = hintSplit(it);
-    q = '<div class="en q-ja">' + esc(it.ja) + badges + mini + '</div>';
+    q = '<div class="en q-ja">' + esc(it.ja) + badges + mini + mark + '</div>';
     a = '<span><i class="hint">' + esc(hint) + '</i><i class="rest">' + esc(rest) + '</i></span>' + ipaHtml + orig;
   } else {
-    q = '<div class="en">' + esc(it.en) + badges + mini + orig + '</div>';
+    q = '<div class="en">' + esc(it.en) + badges + mini + mark + orig + '</div>';
     a = '<span>' + esc(it.ja) + '</span>' + ipaHtml;
   }
   const ex = it.ex || EX[it.id] || '';
@@ -575,7 +583,7 @@ function rowHtml(it){
     '<button type="button" class="voice">🗣 声を変える</button>' +
     (!it.custom && it.ex && EX[it.id] && it.ex !== EX[it.id] ? '<button type="button" class="orig">↩ 元の例文</button>' : '') +
     '<span class="note exmsg"></span></div>';
-  return '<li class="row' + (rev ? ' rv' : '') + (shown ? ' open' : '') + (state.learned[it.id] ? ' learned' : '') + '" data-id="' + esc(it.id) + '">' + q +
+  return '<li class="row' + (rev ? ' rv' : '') + (marked ? ' marked' : '') + (shown ? ' open' : '') + (state.learned[it.id] ? ' learned' : '') + '" data-id="' + esc(it.id) + '">' + q +
     '<button type="button" class="ja' + (rev ? ' rev' : '') + (shown ? ' show' : '') + '" aria-label="答えを表示・非表示">' + a + '</button>' +
     '<label class="chk"><input type="checkbox" aria-label="覚えた"' + (state.learned[it.id] ? ' checked' : '') + '></label>' +
     '<button type="button" class="edit" aria-label="編集">⋯</button>' + exHtml + '</li>';
@@ -606,6 +614,11 @@ function render(){
   const vis = visible(all);
   const done = all.filter(it => state.learned[it.id]).length;
   $('progress').textContent = '覚えた ' + done + ' / ' + all.length + '　表示中 ' + vis.length + ' 件';
+  const folded = pref('fold', 'off') === 'on';
+  document.documentElement.classList.toggle('tools-off', folded);
+  $('foldBtn').textContent = folded ? '▼ 絞り込み' : '▲ 畳む';
+  $('foldBtn').setAttribute('aria-expanded', !folded);
+  $('markBtn').hidden = !all.some(it => it.id === (state.marks || {})[page]);
 
   let html = '';
   if (!vis.length){
@@ -660,6 +673,12 @@ $('hideAll').addEventListener('click', () => { showAll = false; revealed.clear()
 
 $('list').addEventListener('click', e => {
   const row = e.target.closest('li.row'); if (!row) return;
+  if (e.target.closest('button.mark')){
+    // しおりは各ページに1つ。同じカードをもう一度押すと外す。
+    state.marks = state.marks || {};
+    if (state.marks[page] === row.dataset.id) delete state.marks[page]; else state.marks[page] = row.dataset.id;
+    save(); render(); return;
+  }
   const id = row.dataset.id;
   const ja = e.target.closest('button.ja');
   if (ja){
@@ -793,7 +812,7 @@ $('importFile').addEventListener('change', async e => {
   try { d = JSON.parse(await f.text()); } catch(err){ alert('このファイルは読み込めません。'); return; }
   if (!d || typeof d !== 'object' || !Array.isArray(d.custom)){ alert('単語帳のデータではないようです。'); return; }
   if (!confirm('この端末の「覚えた」チェックと追加した内容を、読み込むファイルの内容に置き換えます。よろしいですか？')) return;
-  state = Object.assign(blank(), {learned: d.learned || {}, custom: d.custom, edits: d.edits || {}, deleted: d.deleted || {}, reading: d.reading || {}});
+  state = Object.assign(blank(), {learned: d.learned || {}, custom: d.custom, edits: d.edits || {}, deleted: d.deleted || {}, reading: d.reading || {}, marks: d.marks || {}});
   save(); render();
 });
 
@@ -811,33 +830,92 @@ $('vRate').addEventListener('change', () => setPref('rate', $('vRate').value));
 $('vTest').addEventListener('click', () => speak('The meeting has been moved to three o\'clock on Friday.'));
 $('vClose').addEventListener('click', () => $('voiceDlg').close());
 
+/* ---------- 絞り込みを畳む・しおりへ移動 ---------- */
+$('foldBtn').addEventListener('click', () => { setPref('fold', pref('fold', 'off') === 'on' ? 'off' : 'on'); render(); });
+$('markBtn').addEventListener('click', () => {
+  const id = (state.marks || {})[page]; if (!id) return;
+  const find = () => [...document.querySelectorAll('li.row')].find(l => l.dataset.id === id);
+  let row = find();
+  if (!row){
+    // 絞り込みで隠れているときは、絞り込みを外して探す
+    $('q').value = ''; $('groupSel').value = ''; $('typeSel').value = ''; onlyTodo = false;
+    render(); row = find();
+  }
+  if (!row) return;
+  const g = row.closest('details.group');
+  if (g && !g.open){ g.open = true; collapsed.delete(page + '/' + g.dataset.g); }
+  row.scrollIntoView({block: 'center'});
+  row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+});
+
 /* ---------- 長文（リスニング・速読） ---------- */
 const PS = typeof PASSAGES === 'undefined' ? [] : PASSAGES;
 const SRC = {words: '単語', idioms: 'イディオム', nouns: '複合名詞'};
 // stage: pick（選ぶ）→ run（聞く・読む）→ review（答え合わせ）
-const R = {src: 'words', group: '', mode: 'listen', stage: 'pick', p: null, ans: [], t0: 0, secs: 0, showText: false, showJa: false, playing: false, tip: '', timer: 0, play: 0};
+// 読み上げは1文ずつ。cur = いま読んでいる（次に読む）文の番号。巻き戻しや頭出しは文の単位で行う。
+const R = {src: 'words', group: '', mode: 'listen', stage: 'pick', p: null, ans: [], t0: 0, secs: 0, showText: false, showJa: false, playing: false, tip: '', timer: 0, play: 0, sents: [], cur: 0};
 const pool = () => PS.filter(p => p.page === R.src && (!R.group || p.group === R.group));
 const wordsIn = p => p.text.trim().split(/\s+/).length;
 const resultOf = p => (state.reading || {})[p.id];
+const sentencesOf = text => (text.match(/[^.!?]+[.!?]+["']?\s*/g) || [text]).map(t => t.trim()).filter(Boolean);
 function resultText(p){
   const r = resultOf(p); if (!r) return '';
   return '済 ' + r.score + '/' + r.n + (r.wpm ? '・' + r.wpm + '語/分' : '');
 }
 function stopReading(){
+  R.play++; R.playing = false;          // 先に番号を進め、止めたあとに届く「読み終わり」の合図を無視する
   if (canSpeak) speechSynthesis.cancel();
-  clearInterval(R.timer); R.playing = false; R.play++;
+  clearInterval(R.timer);
 }
-// 本文の中の、そのグループの語に色を付ける
-function passageHtml(p){
-  let t = p.text; const marks = [];
-  for (const [surface, id] of p.words){
-    const i = t.indexOf(surface); if (i < 0) continue;
-    marks.push([surface, id]);
-    t = t.slice(0, i) + '\u0001' + (marks.length - 1) + '\u0002' + t.slice(i + surface.length);
-  }
-  return esc(t).replace(/\u0001(\d+)\u0002/g, (_, n) =>
-    '<button type="button" class="hw" data-act="tip" data-id="' + esc(marks[n][1]) + '">' + esc(marks[n][0]) + '</button>');
+// i 番目の文から最後まで読む
+function playFrom(i){
+  if (!canSpeak || !R.sents.length) return;
+  const token = ++R.play;
+  speechSynthesis.cancel();
+  R.playing = true; R.cur = Math.min(Math.max(i, 0), R.sents.length - 1);
+  R.sents.slice(R.cur).forEach((t, k) => {
+    const n = R.cur + k, u = makeUtter(t);
+    u.onstart = () => { if (token === R.play){ R.cur = n; updatePlayer(); } };
+    if (n === R.sents.length - 1) u.onend = () => { if (token === R.play){ R.playing = false; R.cur = 0; updatePlayer(); } };
+    speechSynthesis.speak(u);
+  });
+  updatePlayer();
 }
+// 再生まわりだけ書き換える（画面全体を作り直すと、バーの操作やスクロール位置が崩れるため）
+function updatePlayer(){
+  const box = $('reading'), b = box.querySelector('[data-act="play"]');
+  if (b){ b.textContent = R.playing ? '■ 止める' : '▶ 再生'; b.classList.toggle('primary', !R.playing); }
+  if ($('rSeek')) $('rSeek').value = R.cur;
+  if ($('rPos')) $('rPos').textContent = posText(R.cur);
+  box.querySelectorAll('.sent').forEach(el => el.classList.toggle('cur', R.playing && +el.dataset.i === R.cur));
+}
+const posText = i => '文 ' + (i + 1) + ' / ' + R.sents.length + '（バーを動かすと、その文から読みます）';
+function playerHtml(){
+  if (!canSpeak) return '<p class="note">この端末は読み上げに対応していません。</p>';
+  return '<div class="player"><div class="ractions">' +
+    '<button type="button" class="btn' + (R.playing ? '' : ' primary') + '" data-act="play">' + (R.playing ? '■ 止める' : '▶ 再生') + '</button>' +
+    '<button type="button" class="btn" data-act="restart">⏮ 最初から</button></div>' +
+    '<input type="range" id="rSeek" min="0" max="' + (R.sents.length - 1) + '" step="1" value="' + R.cur + '" aria-label="再生位置">' +
+    '<p class="note" id="rPos">' + posText(R.cur) + '</p></div>';
+}
+// 本文を1文ずつの部品にする。タップでその文から読む。withWords のときは、そのグループの語に色を付ける。
+function textHtml(p, withWords){
+  const used = new Set();
+  return R.sents.map((sent, i) => {
+    let t = sent; const marks = [];
+    if (withWords) p.words.forEach(([surface, id], w) => {
+      if (used.has(w)) return;
+      const k = t.indexOf(surface); if (k < 0) return;
+      used.add(w); marks.push([surface, id]);
+      t = t.slice(0, k) + '\u0001' + (marks.length - 1) + '\u0002' + t.slice(k + surface.length);
+    });
+    const inner = esc(t).replace(/\u0001(\d+)\u0002/g, (_, n) =>
+      '<button type="button" class="hw" data-act="tip" data-id="' + esc(marks[n][1]) + '">' + esc(marks[n][0]) + '</button>');
+    return '<span class="sent' + (R.playing && i === R.cur ? ' cur' : '') + '" data-act="sent" data-i="' + i + '">' + inner + '</span>';
+  }).join(' ');
+}
+const jaHtml = p => '<div class="ractions"><button type="button" class="btn" data-act="ja">' + (R.showJa ? '和訳を隠す' : '和訳を表示') + '</button></div>' +
+  (R.showJa ? '<p class="rja">' + esc(p.ja) + '</p>' : '');
 function questionsHtml(p, review){
   return p.qs.map((q, i) => '<fieldset class="q"><legend>' + (i + 1) + '. ' + esc(q.q) + '</legend>' +
     q.o.map((o, j) => {
@@ -848,7 +926,6 @@ function questionsHtml(p, review){
 }
 function renderReading(){
   const box = $('reading'), p = R.p;
-  const playBtn = '<button type="button" class="btn' + (R.playing ? '' : ' primary') + '" data-act="play">' + (R.playing ? '■ 止める' : '▶ 再生') + '</button>';
   let h = '';
   if (R.stage === 'pick'){
     const groups = [...new Set(PS.filter(x => x.page === R.src).map(x => x.group))];
@@ -873,8 +950,10 @@ function renderReading(){
   } else if (R.stage === 'run'){
     const head = '<h2>' + (R.mode === 'listen' ? 'リスニング' : '速読') + '｜' + esc(p.group) + '｜' + esc(p.kind) + '</h2>';
     if (R.mode === 'listen'){
-      h = '<div class="rcard">' + head + '<p class="note">本文は隠しています。聞いてから、下の設問に答えてください。何度でも聞き直せます。発音・声・速さは下の「声」から変えられます。</p>' +
-        '<div class="ractions">' + playBtn + '</div></div>' +
+      h = '<div class="rcard">' + head + '<p class="note">発音・声・速さは下の「声」から変えられます。</p>' + playerHtml() +
+        '<div class="ractions"><button type="button" class="btn" data-act="text">' + (R.showText ? '本文を隠す' : '本文を表示') + '</button></div>' +
+        (R.showText ? '<p class="note">文をタップすると、その文の頭から読みます。</p><p class="rtext">' + textHtml(p, false) + '</p>' + jaHtml(p) : '') +
+        '</div>' +
         '<div class="rcard"><h2>設問</h2>' + questionsHtml(p, false) +
         '<div class="ractions"><button type="button" class="btn primary" data-act="check">答え合わせ</button><button type="button" class="btn" data-act="quit">やめる</button></div></div>';
     } else if (!R.t0 && !R.secs){
@@ -897,10 +976,9 @@ function renderReading(){
       '<p class="rscore">' + r.n + ' 問中 ' + r.score + ' 問 正解' + (r.wpm ? '　' + r.wpm + ' 語/分' : '') + '</p>' +
       '<div class="ractions"><button type="button" class="btn primary" data-act="next">次の長文</button><button type="button" class="btn" data-act="quit">選ぶ画面へ</button></div></div>' +
       '<div class="rcard"><h2>設問と解説</h2>' + questionsHtml(p, true) + '</div>' +
-      '<div class="rcard"><h2>本文</h2><p class="note">色の付いた語が、このグループの語です。タップすると意味が出ます。</p>' +
-      '<p class="rtext">' + passageHtml(p) + '</p><div class="rtip" id="rTip">' + R.tip + '</div>' +
-      (R.showJa ? '<p class="rja">' + esc(p.ja) + '</p>' : '') +
-      '<div class="ractions">' + (canSpeak ? playBtn : '') + '<button type="button" class="btn" data-act="ja">' + (R.showJa ? '和訳を隠す' : '和訳を見る') + '</button></div></div>';
+      '<div class="rcard"><h2>本文</h2>' + playerHtml() +
+      '<p class="note">色の付いた語が、このグループの語です。語をタップすると意味が出ます。それ以外の所をタップすると、その文の頭から読みます。</p>' +
+      '<p class="rtext">' + textHtml(p, true) + '</p><div class="rtip" id="rTip">' + R.tip + '</div>' + jaHtml(p) + '</div>';
   }
   box.innerHTML = h;
 }
@@ -909,11 +987,14 @@ function startPassage(){
   const fresh = list.filter(x => !resultOf(x) && x !== R.p);
   const from = fresh.length ? fresh : (list.length > 1 ? list.filter(x => x !== R.p) : list);
   stopReading();
-  Object.assign(R, {p: from[Math.floor(Math.random() * from.length)], stage: 'run', ans: [], t0: 0, secs: 0, showText: false, showJa: false, tip: ''});
+  const p = from[Math.floor(Math.random() * from.length)];
+  Object.assign(R, {p, stage: 'run', ans: [], t0: 0, secs: 0, showText: false, showJa: false, tip: '', sents: sentencesOf(p.text), cur: 0});
   renderReading(); window.scrollTo(0, 0);
 }
+$('reading').addEventListener('input', e => { if (e.target.id === 'rSeek') $('rPos').textContent = posText(+e.target.value); });
 $('reading').addEventListener('change', e => {
   if (e.target.id === 'rGroup'){ R.group = e.target.value; renderReading(); }
+  else if (e.target.id === 'rSeek'){ if (R.playing) playFrom(+e.target.value); else { R.cur = +e.target.value; updatePlayer(); } }
   else if (e.target.type === 'radio') R.ans[+e.target.name.slice(1)] = +e.target.value;   // 画面は作り直さない
 });
 $('reading').addEventListener('click', e => {
@@ -923,27 +1004,23 @@ $('reading').addEventListener('click', e => {
   else if (act === 'mode') R.mode = b.dataset.v;
   else if (act === 'start' || act === 'next'){ startPassage(); return; }
   else if (act === 'quit'){ stopReading(); R.stage = 'pick'; R.p = null; }
-  else if (act === 'play'){
-    if (R.playing) stopReading();
-    else {
-      const token = ++R.play; R.playing = true;
-      speakLong(p.text, () => { if (token === R.play){ R.playing = false; renderReading(); } });
-    }
-  }
+  else if (act === 'play'){ if (R.playing){ stopReading(); updatePlayer(); } else playFrom(R.cur); return; }
+  else if (act === 'restart'){ playFrom(0); return; }
+  else if (act === 'sent'){ playFrom(+b.dataset.i); return; }
   else if (act === 'begin'){
     R.t0 = Date.now();
     R.timer = setInterval(() => { const t = $('rTimer'); if (t) t.textContent = Math.floor((Date.now() - R.t0) / 1000) + ' 秒'; }, 500);
   }
   else if (act === 'finish'){ clearInterval(R.timer); R.secs = Math.max(1, Math.round((Date.now() - R.t0) / 1000)); R.t0 = 0; }
-  else if (act === 'text') R.showText = !R.showText;
+  else if (act === 'text'){ R.showText = !R.showText; if (!R.showText) R.showJa = false; }
   else if (act === 'ja') R.showJa = !R.showJa;
   else if (act === 'check'){
-    stopReading();
+    stopReading(); R.cur = 0;
     const score = p.qs.filter((q, i) => R.ans[i] === q.a).length;
     const rec = {score, n: p.qs.length, mode: R.mode, at: Date.now()};
     if (R.mode === 'speed' && R.secs) rec.wpm = Math.round(wordsIn(p) / R.secs * 60);
     state.reading = state.reading || {}; state.reading[p.id] = rec; save();
-    R.stage = 'review'; renderReading(); window.scrollTo(0, 0); return;
+    R.stage = 'review'; R.showJa = false; renderReading(); window.scrollTo(0, 0); return;
   }
   else if (act === 'tip'){
     const [pg] = b.dataset.id.split(':');
