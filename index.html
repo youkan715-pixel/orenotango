@@ -74,6 +74,8 @@ li.row.open .ex{display:block}
 .ex button{border:1px solid var(--line);background:var(--bg);border-radius:8px;min-height:36px;padding:4px 12px;margin-right:6px;font-size:14px}
 .no-speech .ex button{display:none}
 dialog{max-height:calc(100dvh - 24px);overflow:auto}
+.auto-ex{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.auto-ex .note{margin:0}
 #spell{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px}
 #spell p{margin:0 0 6px}
 #spell p:last-child{margin-bottom:0}
@@ -129,6 +131,7 @@ dialog textarea{min-height:72px;resize:vertical}
 <footer>
   <div class="wrap">
     <button class="btn primary" id="addBtn">＋ 追加</button>
+    <button class="btn" id="voiceBtn">声</button>
     <button class="btn" id="exportBtn">書き出し</button>
     <button class="btn" id="importBtn">読み込み</button>
     <input type="file" id="importFile" accept="application/json,.json" hidden>
@@ -142,6 +145,7 @@ dialog textarea{min-height:72px;resize:vertical}
     <div id="spell" hidden></div>
     <label>日本語<textarea id="fJa" required></textarea></label>
     <label>例文（英語・なくてもよい）<textarea id="fEx" autocapitalize="sentences" spellcheck="false"></textarea></label>
+    <div class="auto-ex"><button type="button" class="btn" id="autoEx">例文を自動で入れる</button><span class="note" id="autoExMsg"></span></div>
     <label id="fGroupWrap">グループ<select id="fGroupSel"></select><input id="fGroup" autocomplete="off" placeholder="新しいグループの名前" aria-label="新しいグループの名前"></label>
     <label id="fTypeWrap">型<select id="fType"></select></label>
     <p class="note" id="dlgNote"></p>
@@ -152,6 +156,24 @@ dialog textarea{min-height:72px;resize:vertical}
       <button type="submit" class="btn primary">保存</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="voiceDlg">
+  <h2>声の設定</h2>
+  <label>声<select id="vSel"></select></label>
+  <label>速さ<select id="vRate">
+    <option value="0.7">ゆっくり</option>
+    <option value="0.9">ややゆっくり</option>
+    <option value="1">ふつう</option>
+    <option value="1.15">速め</option>
+  </select></label>
+  <p class="note" id="vNone" hidden>この端末では英語の声が見つかりませんでした。</p>
+  <p class="note">もっと自然な声にしたいときは、端末の設定で高品質の英語の声を追加すると、ここに出てきます。</p>
+  <div class="dlg-actions">
+    <button type="button" class="btn" id="vTest">🔊 試し聞き</button>
+    <span class="sp"></span>
+    <button type="button" class="btn primary" id="vClose">閉じる</button>
+  </div>
 </dialog>
 
 <script src="data.js"></script>
@@ -219,15 +241,86 @@ const canSpeak = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in wi
 if (!canSpeak) document.documentElement.classList.add('no-speech');
 // 読み上げ用に、(名) などの注記と日本語を取り除く
 function spoken(en){ return en.replace(/[(（][^)）]*[)）]/g, ' ').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim(); }
+// 声えらび。端末には効果音のような声（ロボット声・ささやき声など）も入っているので、それらは除く。
+const ODD_VOICES = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Organ|Pipe Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph|Princess|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)\b/;
+const FEMALE = ['Ava','Zoe','Samantha','Allison','Susan','Joelle','Noelle','Nicky','Google US English','Aria','Jenny','Michelle','Zira','Karen','Serena','Kate','Stephanie','Martha','Moira','Tessa','Catherine','Google UK English Female'];
+const MALE = ['Evan','Nathan','Tom','Alex','Aaron','Guy','David','Mark','Daniel','Oliver','Arthur','Gordon','Rishi','Lee','Google UK English Male'];
+const inList = (list, name) => list.findIndex(n => name === n || name.startsWith(n + ' ') || name.includes(' ' + n + ' ') || name.endsWith(' ' + n));
+// 日本語の端末では、効果音の声が「ささやき声」「オルガン」のように日本語名で出るので、それも除く
+const isLocalizedOdd = name => /[^\x20-\x7E]/.test(name.replace(/\s*[(（].*$/, ''));
+function gender(v){ return inList(FEMALE, v.name) >= 0 ? '女性' : inList(MALE, v.name) >= 0 ? '男性' : ''; }
+function englishVoices(){
+  if (!canSpeak) return [];
+  const score = v => {
+    let n = 0;
+    if (/Premium|Enhanced|Natural|Neural/i.test(v.name)) n -= 100;   // 高品質版を最優先
+    const f = inList(FEMALE, v.name), m = inList(MALE, v.name);
+    n += f >= 0 ? f : m >= 0 ? m : 50;                                // 知っている自然な声を上に
+    if (v.lang.replace('_', '-') !== 'en-US') n += 25;                // アメリカ英語を先に
+    return n;
+  };
+  return speechSynthesis.getVoices()
+    .filter(v => v.lang && v.lang.toLowerCase().startsWith('en') && !ODD_VOICES.test(v.name) && !isLocalizedOdd(v.name))
+    .sort((x, y) => score(x) - score(y) || x.name.localeCompare(y.name));
+}
+function pref(k, d){ try { return localStorage.getItem(KEY + '-' + k) || d; } catch(e){ return d; } }
+function setPref(k, v){ try { localStorage.setItem(KEY + '-' + k, v); } catch(e){} }
 function speak(text){
   if (!canSpeak || !text) return;
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'en-US'; u.rate = 0.95;
-  const vs = speechSynthesis.getVoices();
-  const v = vs.find(x => x.lang === 'en-US') || vs.find(x => x.lang && x.lang.startsWith('en'));
-  if (v) u.voice = v;
+  u.lang = 'en-US'; u.rate = +pref('rate', '0.9');
+  const vs = englishVoices(), want = pref('voice', '');
+  const v = vs.find(x => x.name === want) || vs[0];
+  if (v){ u.voice = v; u.lang = v.lang.replace('_', '-'); }
   speechSynthesis.cancel(); speechSynthesis.speak(u);
 }
+function fillVoices(){
+  const vs = englishVoices(), want = pref('voice', '');
+  $('vSel').innerHTML = '<option value="">おまかせ' + (vs[0] ? '（' + esc(vs[0].name) + '）' : '') + '</option>' +
+    vs.map(v => '<option value="' + esc(v.name) + '"' + (v.name === want ? ' selected' : '') + '>' +
+      esc(v.name) + '　' + [gender(v), v.lang.replace('_', '-')].filter(Boolean).join('・') + '</option>').join('');
+  $('vRate').value = pref('rate', '0.9');
+  $('vNone').hidden = vs.length > 0;
+}
+if (canSpeak) speechSynthesis.onvoiceschanged = () => { if ($('voiceDlg').open) fillVoices(); };
+
+/* ---------- 例文を自動で入れる（ネット接続が必要） ---------- */
+// 無料の例文集 Tatoeba から探し、なければ無料の英語辞書から探す。押すたびに別の文を出す。
+async function findExample(en){
+  const words = spoken(en).split(' ').filter(Boolean);
+  const core = words.filter(w => w !== 'A' && w !== 'B');          // identify A with B → identify with
+  if (!core.length) return '';
+  const q = core.length === words.length ? '"' + core.join(' ') + '"' : core.join(' ');
+  const now = $('fEx').value.trim();
+  const ok = t => t && t.length <= 140 && t !== now;
+  const r = await fetch('https://api.tatoeba.org/unstable/sentences?lang=eng&sort=random&limit=20&word_count=6-14&q=' + encodeURIComponent(q));
+  if (r.ok){
+    // 検索は活用形や派生語（resilient → resilience）も拾うので、入力した形そのままを含む文を優先する
+    const list = ((await r.json()).data || []).map(x => x.text).filter(ok);
+    const exact = core.join(' ').toLowerCase();
+    const hit = list.find(t => t.toLowerCase().includes(exact)) || list[0];
+    if (hit) return hit;
+  }
+  const d = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(core.join(' ')));
+  if (d.ok){
+    const list = (await d.json()).flatMap(e => e.meanings || []).flatMap(m => m.definitions || []).map(x => x.example).filter(ok);
+    if (list.length) return list[Math.floor(Math.random() * list.length)];
+  }
+  return '';
+}
+$('autoEx').addEventListener('click', async () => {
+  const en = $('fEn').value.trim(), msg = $('autoExMsg');
+  if (!en){ msg.textContent = '先に英語を入力してください。'; return; }
+  $('autoEx').disabled = true; msg.textContent = '探しています…';
+  try {
+    const ex = await findExample(en);
+    if (ex){ $('fEx').value = ex; msg.textContent = '気に入らなければ、もう一度押すと別の文になります。'; }
+    else msg.textContent = '例文が見つかりませんでした。自分で入力してください。';
+  } catch(e){
+    msg.textContent = 'ネットにつながっていないようです。自分で入力するか、あとで試してください。';
+  }
+  $('autoEx').disabled = false;
+});
 
 /* ---------- つづりの確認（追加・編集画面の「もしかして」） ---------- */
 // 辞書は追加画面を初めて開いたときに読み込む。読めなければ何も出さない（追加はふつうにできる）。
@@ -507,7 +600,7 @@ function openDialog(id){
   $('fType').value = editing && editing.type ? editing.type : ($('typeSel').value || 2);
   $('dlgNote').textContent = isIdiom ? '「自動」のままにすると、先頭の動詞でグループが決まります。' : '';
   $('delBtn').hidden = !editing;
-  $('spell').hidden = true;
+  $('spell').hidden = true; $('autoExMsg').textContent = '';
   $('dlg').showModal();
   loadDict().then(checkSpelling);
   $('fEn').focus();
@@ -559,6 +652,13 @@ $('importFile').addEventListener('change', async e => {
   state = Object.assign(blank(), {learned: d.learned || {}, custom: d.custom, edits: d.edits || {}, deleted: d.deleted || {}});
   save(); render();
 });
+
+$('voiceBtn').hidden = !canSpeak;
+$('voiceBtn').addEventListener('click', () => { fillVoices(); $('voiceDlg').showModal(); });
+$('vSel').addEventListener('change', () => setPref('voice', $('vSel').value));
+$('vRate').addEventListener('change', () => setPref('rate', $('vRate').value));
+$('vTest').addEventListener('click', () => speak('The meeting has been moved to three o\'clock on Friday.'));
+$('vClose').addEventListener('click', () => $('voiceDlg').close());
 
 render();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
