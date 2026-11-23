@@ -35,6 +35,7 @@ header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px so
   border-radius:10px;font-weight:600;min-height:44px}
 .tabs button[aria-selected="true"]{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 .tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
+.tools #accentSel{flex:0 0 auto;padding:8px 10px}
 .tools input[type=search],.tools select{flex:1 1 140px;min-width:0;padding:8px 10px;border:1px solid var(--line);
   border-radius:8px;background:var(--card);min-height:40px}
 .btn{padding:8px 12px;border:1px solid var(--line);background:var(--card);border-radius:8px;min-height:40px;white-space:nowrap}
@@ -129,7 +130,7 @@ dialog textarea{min-height:72px;resize:vertical}
     <div class="tools">
       <button class="btn" id="dirBtn" aria-pressed="false">英→日</button>
       <button class="btn" id="exBtn"></button>
-      <button class="btn" id="accentBtn"></button>
+      <select class="btn" id="accentSel" aria-label="発音"></select>
       <button class="btn" id="onlyTodo" aria-pressed="false">未習得のみ</button>
       <button class="btn" id="shuffle" aria-pressed="false">シャッフル</button>
       <button class="btn" id="showAll">全部見せる</button>
@@ -173,7 +174,7 @@ dialog textarea{min-height:72px;resize:vertical}
 
 <dialog id="voiceDlg">
   <h2>声の設定</h2>
-  <label>発音<select id="vAccent"><option value="US">アメリカ英語</option><option value="GB">イギリス英語</option><option value="ALL">すべて（国を問わない）</option></select></label>
+  <label>発音<select id="vAccent"></select></label>
   <label>声<select id="vSel"></select></label>
   <label>速さ<select id="vRate">
     <option value="0.7">ゆっくり</option>
@@ -266,7 +267,7 @@ const ODD_JA = ['ささやき声', 'オルガン', 'スーパースター', 'ト
 const isLocalizedOdd = name => ODD_JA.some(n => name.startsWith(n));
 function gender(v){ return inList(FEMALE, v.name) >= 0 ? '女性' : inList(MALE, v.name) >= 0 ? '男性' : ''; }
 // 発音の種類。全体で切り替える。「すべて」は国を問わず全部の声を使う。
-const ACCENTS = {US: ['アメリカ', 'en-US'], GB: ['イギリス', 'en-GB'], ALL: ['すべて', '']};
+const ACCENTS = {US: ['アメリカ', 'en-US'], GB: ['イギリス', 'en-GB'], AU: ['オーストラリア', 'en-AU'], IN: ['インド', 'en-IN'], IE: ['アイルランド', 'en-IE'], ZA: ['南アフリカ', 'en-ZA'], ALL: ['すべて', '']};
 function accent(){ const a = pref('accent', 'US'); return ACCENTS[a] ? a : 'US'; }
 function englishVoices(){
   if (!canSpeak) return [];
@@ -546,7 +547,7 @@ function render(){
   $('onlyTodo').setAttribute('aria-pressed', onlyTodo);
   $('dirBtn').setAttribute('aria-pressed', dir === 'ja');
   $('dirBtn').textContent = dir === 'ja' ? '日→英' : '英→日';
-  $('accentBtn').textContent = '発音：' + ACCENTS[accent()][0];
+  $('accentSel').value = accent();
   const exOn = pref('ex', 'on') === 'on';
   $('exBtn').textContent = '例文：' + (exOn ? 'オン' : 'オフ');
   $('exBtn').setAttribute('aria-pressed', exOn);
@@ -749,12 +750,11 @@ $('importFile').addEventListener('change', async e => {
 $('voiceBtn').hidden = !canSpeak;
 $('voiceBtn').addEventListener('click', () => { fillVoices(); $('voiceDlg').showModal(); });
 $('exBtn').addEventListener('click', () => { setPref('ex', pref('ex', 'on') === 'on' ? 'off' : 'on'); render(); });
-$('accentBtn').hidden = !canSpeak;
-$('accentBtn').addEventListener('click', () => {
-  const keys = Object.keys(ACCENTS);
-  setPref('accent', keys[(keys.indexOf(accent()) + 1) % keys.length]);
-  render();
-});
+// 発音は一覧から選ぶ（上のボタン列と、声の設定画面の両方。どちらで変えても連動する）
+$('accentSel').innerHTML = Object.keys(ACCENTS).map(k => '<option value="' + k + '">発音：' + ACCENTS[k][0] + '</option>').join('');
+$('vAccent').innerHTML = Object.keys(ACCENTS).map(k => '<option value="' + k + '">' + ACCENTS[k][0] + (k === 'ALL' ? '（国を問わない）' : '英語') + '</option>').join('');
+$('accentSel').hidden = !canSpeak;
+$('accentSel').addEventListener('change', () => { setPref('accent', $('accentSel').value); render(); });
 $('vAccent').addEventListener('change', () => { setPref('accent', $('vAccent').value); fillVoices(); render(); });
 $('vSel').addEventListener('change', () => setPref('voice', $('vSel').value));
 $('vRate').addEventListener('change', () => setPref('rate', $('vRate').value));
