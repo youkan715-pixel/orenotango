@@ -181,6 +181,7 @@ dialog textarea{min-height:72px;resize:vertical}
     <option value="1">ふつう</option>
     <option value="1.15">速め</option>
   </select></label>
+  <p class="note" id="vCount"></p>
   <p class="note" id="vNone" hidden>この端末では英語の声が見つかりませんでした。</p>
   <p class="note">もっと自然な声にしたいときは、端末の設定で高品質の英語の声を追加すると、ここに出てきます。</p>
   <div class="dlg-actions">
@@ -260,8 +261,9 @@ const ODD_VOICES = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|G
 const FEMALE = ['Ava','Zoe','Samantha','Allison','Susan','Joelle','Noelle','Nicky','Google US English','Aria','Jenny','Michelle','Zira','Karen','Serena','Kate','Stephanie','Martha','Moira','Tessa','Catherine','Google UK English Female'];
 const MALE = ['Evan','Nathan','Tom','Alex','Aaron','Guy','David','Mark','Daniel','Oliver','Arthur','Gordon','Rishi','Lee','Google UK English Male'];
 const inList = (list, name) => list.findIndex(n => name === n || name.startsWith(n + ' ') || name.includes(' ' + n + ' ') || name.endsWith(' ' + n));
-// 日本語の端末では、効果音の声が「ささやき声」「オルガン」のように日本語名で出るので、それも除く
-const isLocalizedOdd = name => /[^\x20-\x7E]/.test(name.replace(/\s*[(（].*$/, ''));
+// 日本語の端末では、効果音の声が日本語名で出るので、それも除く（ふつうの声が日本語名の端末もあるので、名前を決め打ちする）
+const ODD_JA = ['ささやき声', 'オルガン', 'スーパースター', 'トリノイド', 'ベル', '道化', '震え'];
+const isLocalizedOdd = name => ODD_JA.some(n => name.startsWith(n));
 function gender(v){ return inList(FEMALE, v.name) >= 0 ? '女性' : inList(MALE, v.name) >= 0 ? '男性' : ''; }
 // 発音の種類。全体で切り替える。「すべて」は国を問わず全部の声を使う。
 const ACCENTS = {US: ['アメリカ', 'en-US'], GB: ['イギリス', 'en-GB'], ALL: ['すべて', '']};
@@ -302,9 +304,13 @@ function fillVoices(){
   $('vRate').value = pref('rate', '0.9');
   $('vAccent').value = accent();
   $('vNone').hidden = vs.length > 0;
+  $('vCount').textContent = 'この端末で使える声：' + vs.length + ' 個（端末に入っている声は全部で ' + speechSynthesis.getVoices().length + ' 個）';
   $('vNone').textContent = 'この端末には、' + (accent() === 'ALL' ? '英語' : ACCENTS[accent()][0] + '英語') + 'の声が見つかりませんでした。端末の設定で声を追加すると使えます。';
 }
-if (canSpeak) speechSynthesis.onvoiceschanged = () => { if ($('voiceDlg').open) fillVoices(); };
+if (canSpeak){
+  speechSynthesis.getVoices();   // 一覧が遅れて届く端末があるので、起動時に取りにいっておく
+  speechSynthesis.onvoiceschanged = () => { if ($('voiceDlg').open) fillVoices(); };
+}
 
 /* ---------- 発音記号（単語ページだけ） ---------- */
 // 発音辞書 CMUdict（アメリカ英語）から作った一覧を読み込む。読めるまでは記号なしで表示する。
@@ -615,7 +621,7 @@ $('list').addEventListener('click', e => {
     // 次の声に切り替えて、その声ですぐ読む
     const it = itemsOf(page).find(x => x.id === id), vs = englishVoices(), msg = row.querySelector('.exmsg');
     if (!it) return;
-    if (vs.length < 2){ msg.textContent = accent() === 'ALL' ? 'この端末には、切り替えられる英語の声がありません。' : 'この端末の' + ACCENTS[accent()][0] + '英語の声は' + (vs.length ? '1つだけ' : '見つかりません') + 'でした。上の「発音」を「すべて」にすると、ほかの国の声も使えます。'; if (vs.length) speak(it.ex || EX[it.id] || spoken(it.en)); return; }
+    if (vs.length < 2){ msg.textContent = accent() === 'ALL' ? (vs.length ? 'この端末に入っている英語の声は1つだけでした。端末の設定で英語の声を追加すると切り替えられます。' : 'この端末では声の一覧を取得できませんでした。読み上げは端末の標準の声で行います。もう一度押すと取得できることがあります。') : 'この端末の' + ACCENTS[accent()][0] + '英語の声は' + (vs.length ? '1つだけ' : '見つかりません') + 'でした。上の「発音」を「すべて」にすると、ほかの国の声も使えます。'; if (vs.length) speak(it.ex || EX[it.id] || spoken(it.en)); return; }
     const cur = pref('voice', '') || vs[0].name;
     const v = vs[(vs.findIndex(x => x.name === cur) + 1) % vs.length];
     setPref('voice', v.name);
