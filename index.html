@@ -68,6 +68,16 @@ button.ja.rev.show .rest{background:transparent;color:inherit}
 button.ja.rev small{display:none;padding:0 8px;color:var(--sub);font-size:12px}
 button.ja.rev.show small{display:block}
 .en.q-ja{font-weight:500}
+.ex{display:none;grid-column:1/-1;padding:0 14px 12px}
+li.row.open .ex{display:block}
+.ex p{margin:0 0 8px;font-size:15px}
+.ex button{border:1px solid var(--line);background:var(--bg);border-radius:8px;min-height:36px;padding:4px 12px;margin-right:6px;font-size:14px}
+.no-speech .ex button{display:none}
+dialog{max-height:calc(100dvh - 24px);overflow:auto}
+#spell{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px}
+#spell p{margin:0 0 6px}
+#spell p:last-child{margin-bottom:0}
+#spell button{border:1px solid var(--accent);color:var(--accent);background:transparent;border-radius:8px;min-height:36px;padding:4px 12px;margin:2px 6px 2px 0;font-weight:600}
 li.row.rv{grid-template-columns:minmax(0,7fr) minmax(0,5fr) 44px 36px}
 .chk{display:flex;align-items:center;justify-content:center}
 .chk input{width:22px;height:22px;accent-color:var(--done)}
@@ -129,7 +139,9 @@ dialog textarea{min-height:72px;resize:vertical}
   <form method="dialog" id="form">
     <h2 id="dlgTitle">追加</h2>
     <label>英語<input id="fEn" required autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <div id="spell" hidden></div>
     <label>日本語<textarea id="fJa" required></textarea></label>
+    <label>例文（英語・なくてもよい）<textarea id="fEx" autocapitalize="sentences" spellcheck="false"></textarea></label>
     <label id="fGroupWrap">グループ<select id="fGroupSel"></select><input id="fGroup" autocomplete="off" placeholder="新しいグループの名前" aria-label="新しいグループの名前"></label>
     <label id="fTypeWrap">型<select id="fType"></select></label>
     <p class="note" id="dlgNote"></p>
@@ -143,6 +155,7 @@ dialog textarea{min-height:72px;resize:vertical}
 </dialog>
 
 <script src="data.js"></script>
+<script src="examples.js"></script>
 <script>
 'use strict';
 const TYPES = {
@@ -200,6 +213,107 @@ function save(){
   catch(e){ alert('保存できませんでした。ブラウザの設定で保存が止められている可能性があります。'); }
 }
 
+/* ---------- 例文と読み上げ ---------- */
+const EX = typeof EXAMPLES === 'undefined' ? {} : EXAMPLES;
+const canSpeak = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+if (!canSpeak) document.documentElement.classList.add('no-speech');
+// 読み上げ用に、(名) などの注記と日本語を取り除く
+function spoken(en){ return en.replace(/[(（][^)）]*[)）]/g, ' ').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function speak(text){
+  if (!canSpeak || !text) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-US'; u.rate = 0.95;
+  const vs = speechSynthesis.getVoices();
+  const v = vs.find(x => x.lang === 'en-US') || vs.find(x => x.lang && x.lang.startsWith('en'));
+  if (v) u.voice = v;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+
+/* ---------- つづりの確認（追加・編集画面の「もしかして」） ---------- */
+// 辞書は追加画面を初めて開いたときに読み込む。読めなければ何も出さない（追加はふつうにできる）。
+let DICT = null, BYLEN = null, COMMON = null, dictLoading = null;
+function loadDict(){
+  if (!dictLoading) dictLoading = fetch('dict.txt').then(r => r.ok ? r.text() : Promise.reject()).then(t => {
+    const d = new Set(t.split('\n'));
+    // このアプリに入っている語は「よく使う語」として優先する
+    COMMON = new Set();
+    const own = PAGES.flatMap(p => BASE[p].map(it => it.en)).concat(Object.values(EX)).join(' ').toLowerCase().match(/[a-z]+/g) || [];
+    for (const w of own){ COMMON.add(w); d.add(w); }
+    BYLEN = {};
+    for (const w of d) (BYLEN[w.length] || (BYLEN[w.length] = [])).push(w);
+    DICT = d;
+  }).catch(() => { dictLoading = null; });
+  return dictLoading;
+}
+// 辞書にない活用形（複数形・過去形など）を、元の形に戻して確かめる
+function known(w){
+  if (DICT.has(w)) return true;
+  const tries = [];
+  if (w.endsWith('ies')) tries.push(w.slice(0, -3) + 'y');
+  if (w.endsWith('es')) tries.push(w.slice(0, -2));
+  if (w.endsWith('s')) tries.push(w.slice(0, -1));
+  if (w.endsWith('ied')) tries.push(w.slice(0, -3) + 'y');
+  if (w.endsWith('ed')) tries.push(w.slice(0, -2), w.slice(0, -1), w.slice(0, -3));
+  if (w.endsWith('ing')) tries.push(w.slice(0, -3), w.slice(0, -3) + 'e', w.slice(0, -4));
+  if (w.endsWith('ly')) tries.push(w.slice(0, -2));
+  if (w.endsWith('er')) tries.push(w.slice(0, -2), w.slice(0, -1));
+  if (w.endsWith('est')) tries.push(w.slice(0, -3), w.slice(0, -2));
+  return tries.some(t => t.length > 1 && DICT.has(t));
+}
+// 何文字直せば同じになるか（入れ替え・抜け・余分・違い）。max を超えたら打ち切る。
+function distance(a, b, max){
+  const n = a.length, m = b.length;
+  let prev2 = null, prev = Array.from({length: m + 1}, (_, j) => j);
+  for (let i = 1; i <= n; i++){
+    const cur = [i]; let best = i;
+    for (let j = 1; j <= m; j++){
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur[j] = v; if (v < best) best = v;
+    }
+    if (best > max) return max + 1;
+    prev2 = prev; prev = cur;
+  }
+  return prev[m];
+}
+function suggest(w){
+  const max = w.length <= 4 ? 1 : 2, found = [];
+  for (let len = w.length - max; len <= w.length + max; len++){
+    for (const c of BYLEN[len] || []){
+      const d = distance(w, c, max);
+      if (d <= max) found.push([d * 10 - (COMMON.has(c) ? 6 : 0) - (c[0] === w[0] ? 3 : 0), c]);
+    }
+  }
+  return found.sort((x, y) => x[0] - y[0] || x[1].localeCompare(y[1])).slice(0, 3).map(x => x[1]);
+}
+let spellTimer = 0;
+function checkSpelling(){
+  const box = $('spell');
+  if (!DICT){ box.hidden = true; return; }
+  // 3文字以上の語だけ見る。A・B や RSVP のような大文字だけの語は見ない。
+  const words = ($('fEn').value.match(/[A-Za-z]+/g) || []).filter(w => w.length >= 3 && w !== w.toUpperCase());
+  let html = '';
+  for (const w of new Set(words)){
+    const lw = w.toLowerCase();
+    if (known(lw)) continue;
+    const cands = suggest(lw);
+    if (!cands.length) continue;
+    const cap = w[0] !== lw[0];
+    html += '<p>「' + esc(w) + '」は、もしかして：<br>' + cands.map(c => {
+      const to = cap ? c[0].toUpperCase() + c.slice(1) : c;
+      return '<button type="button" data-from="' + esc(w) + '" data-to="' + esc(to) + '">' + esc(to) + '</button>';
+    }).join('') + '</p>';
+  }
+  box.innerHTML = html; box.hidden = !html;
+}
+$('fEn').addEventListener('input', () => { clearTimeout(spellTimer); spellTimer = setTimeout(checkSpelling, 350); });
+$('spell').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  $('fEn').value = $('fEn').value.replace(new RegExp('\\b' + b.dataset.from + '\\b'), b.dataset.to);
+  checkSpelling(); $('fEn').focus();
+});
+
 /* ---------- 画面の状態 ---------- */
 let page = 'words';
 let onlyTodo = false, order = null, showAll = false;
@@ -250,10 +364,14 @@ function rowHtml(it){
     q = '<div class="en">' + esc(it.en) + badges + orig + '</div>';
     a = '<span>' + esc(it.ja) + '</span>';
   }
-  return '<li class="row' + (rev ? ' rv' : '') + (state.learned[it.id] ? ' learned' : '') + '" data-id="' + esc(it.id) + '">' + q +
+  const ex = it.ex || EX[it.id] || '';
+  const exHtml = '<div class="ex">' + (ex ? '<p>' + esc(ex) + '</p>' : '') +
+    '<button type="button" class="say" data-say="w">🔊 単語</button>' +
+    (ex ? '<button type="button" class="say" data-say="e">🔊 例文</button>' : '') + '</div>';
+  return '<li class="row' + (rev ? ' rv' : '') + (shown ? ' open' : '') + (state.learned[it.id] ? ' learned' : '') + '" data-id="' + esc(it.id) + '">' + q +
     '<button type="button" class="ja' + (rev ? ' rev' : '') + (shown ? ' show' : '') + '" aria-label="答えを表示・非表示">' + a + '</button>' +
     '<label class="chk"><input type="checkbox" aria-label="覚えた"' + (state.learned[it.id] ? ' checked' : '') + '></label>' +
-    '<button type="button" class="edit" aria-label="編集">⋯</button></li>';
+    '<button type="button" class="edit" aria-label="編集">⋯</button>' + exHtml + '</li>';
 }
 function render(){
   const all = itemsOf(page), names = groupNames(all);
@@ -328,8 +446,14 @@ $('list').addEventListener('click', e => {
   const ja = e.target.closest('button.ja');
   if (ja){
     const on = !ja.classList.contains('show');
-    ja.classList.toggle('show', on);
+    ja.classList.toggle('show', on); row.classList.toggle('open', on);
     if (on) revealed.add(id); else { revealed.delete(id); if (showAll){ showAll = false; itemsOf(page).forEach(it => { if (it.id !== id) revealed.add(it.id); }); } }
+    return;
+  }
+  const say = e.target.closest('button.say');
+  if (say){
+    const it = itemsOf(page).find(x => x.id === id); if (!it) return;
+    speak(say.dataset.say === 'e' ? (it.ex || EX[it.id] || '') : spoken(it.en));
     return;
   }
   if (e.target.closest('button.edit')) openDialog(id);
@@ -362,6 +486,7 @@ function openDialog(id){
   $('dlgTitle').textContent = label + (editing ? 'を編集' : 'を追加');
   $('fEn').value = editing ? editing.en : '';
   $('fJa').value = editing ? editing.ja : '';
+  $('fEx').value = editing ? (editing.ex || EX[editing.id] || '') : '';
   const isIdiom = page === 'idioms';
   $('fTypeWrap').hidden = !isIdiom;
   // 単語は自由入力。イディオムと複合名詞は今あるグループから選ぶ。
@@ -382,7 +507,9 @@ function openDialog(id){
   $('fType').value = editing && editing.type ? editing.type : ($('typeSel').value || 2);
   $('dlgNote').textContent = isIdiom ? '「自動」のままにすると、先頭の動詞でグループが決まります。' : '';
   $('delBtn').hidden = !editing;
+  $('spell').hidden = true;
   $('dlg').showModal();
+  loadDict().then(checkSpelling);
   $('fEn').focus();
 }
 $('addBtn').addEventListener('click', () => openDialog(null));
@@ -390,7 +517,7 @@ $('cancelBtn').addEventListener('click', () => $('dlg').close());
 $('form').addEventListener('submit', () => {
   const en = $('fEn').value.trim(), ja = $('fJa').value.trim();
   if (!en || !ja) return;
-  const v = {en, ja};
+  const v = {en, ja, ex: $('fEx').value.trim()};
   const typed = $('fGroup').value.trim(), sel = $('fGroupSel').value;
   if (page === 'words') v.group = typed || ADDED;
   else if (page === 'nouns') v.group = sel === NEW_GROUP ? (typed || ADDED) : sel;
