@@ -68,11 +68,16 @@ button.ja.rev.show .rest{background:transparent;color:inherit}
 button.ja.rev small{display:none;padding:0 8px;color:var(--sub);font-size:12px}
 button.ja.rev.show small{display:block}
 .en.q-ja{font-weight:500}
-.ex{display:none;grid-column:1/-1;padding:0 14px 12px}
-li.row.open .ex{display:block}
+button.ja .ipa{display:block;padding:3px 8px 0;color:var(--sub);font-size:13px;font-weight:400}
+/* 例文と読み上げボタンは最初から見せる。日→英のときだけ、例文の文字は答えを開くまで隠す（音は聞ける）。 */
+.ex{grid-column:1/-1;padding:0 14px 12px}
+li.row.rv:not(.open) .ex p{display:none}
+.ex button{margin-bottom:4px}
 .ex p{margin:0 0 8px;font-size:15px}
 .ex button{border:1px solid var(--line);background:var(--bg);border-radius:8px;min-height:36px;padding:4px 12px;margin-right:6px;font-size:14px}
-.no-speech .ex button{display:none}
+.no-speech .ex .say,.no-speech .ex .voice{display:none}
+.ex .exmsg{display:block;margin-top:6px}
+.ex .exmsg:empty{display:none}
 dialog{max-height:calc(100dvh - 24px);overflow:auto}
 .auto-ex{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
 .auto-ex .note{margin:0}
@@ -117,6 +122,7 @@ dialog textarea{min-height:72px;resize:vertical}
     </div>
     <div class="tools">
       <button class="btn" id="dirBtn" aria-pressed="false">英→日</button>
+      <button class="btn" id="accentBtn"></button>
       <button class="btn" id="onlyTodo" aria-pressed="false">未習得のみ</button>
       <button class="btn" id="shuffle" aria-pressed="false">シャッフル</button>
       <button class="btn" id="showAll">全部見せる</button>
@@ -160,6 +166,7 @@ dialog textarea{min-height:72px;resize:vertical}
 
 <dialog id="voiceDlg">
   <h2>声の設定</h2>
+  <label>発音<select id="vAccent"><option value="US">アメリカ英語</option><option value="GB">イギリス英語</option><option value="ALL">すべて（国を問わない）</option></select></label>
   <label>声<select id="vSel"></select></label>
   <label>速さ<select id="vRate">
     <option value="0.7">ゆっくり</option>
@@ -249,8 +256,12 @@ const inList = (list, name) => list.findIndex(n => name === n || name.startsWith
 // 日本語の端末では、効果音の声が「ささやき声」「オルガン」のように日本語名で出るので、それも除く
 const isLocalizedOdd = name => /[^\x20-\x7E]/.test(name.replace(/\s*[(（].*$/, ''));
 function gender(v){ return inList(FEMALE, v.name) >= 0 ? '女性' : inList(MALE, v.name) >= 0 ? '男性' : ''; }
+// 発音の種類。全体で切り替える。「すべて」は国を問わず全部の声を使う。
+const ACCENTS = {US: ['アメリカ', 'en-US'], GB: ['イギリス', 'en-GB'], ALL: ['すべて', '']};
+function accent(){ const a = pref('accent', 'US'); return ACCENTS[a] ? a : 'US'; }
 function englishVoices(){
   if (!canSpeak) return [];
+  const want = ACCENTS[accent()][1];
   const score = v => {
     let n = 0;
     if (/Premium|Enhanced|Natural|Neural/i.test(v.name)) n -= 100;   // 高品質版を最優先
@@ -261,6 +272,7 @@ function englishVoices(){
   };
   return speechSynthesis.getVoices()
     .filter(v => v.lang && v.lang.toLowerCase().startsWith('en') && !ODD_VOICES.test(v.name) && !isLocalizedOdd(v.name))
+    .filter(v => !want || v.lang.replace('_', '-').toLowerCase() === want.toLowerCase())
     .sort((x, y) => score(x) - score(y) || x.name.localeCompare(y.name));
 }
 function pref(k, d){ try { return localStorage.getItem(KEY + '-' + k) || d; } catch(e){ return d; } }
@@ -272,6 +284,7 @@ function speak(text){
   const vs = englishVoices(), want = pref('voice', '');
   const v = vs.find(x => x.name === want) || vs[0];
   if (v){ u.voice = v; u.lang = v.lang.replace('_', '-'); }
+  else u.lang = ACCENTS[accent()][1] || 'en-US';   // その発音の声が一覧になくても、端末に任せて読ませる
   speechSynthesis.cancel(); speechSynthesis.speak(u);
 }
 function fillVoices(){
@@ -280,18 +293,36 @@ function fillVoices(){
     vs.map(v => '<option value="' + esc(v.name) + '"' + (v.name === want ? ' selected' : '') + '>' +
       esc(v.name) + '　' + [gender(v), v.lang.replace('_', '-')].filter(Boolean).join('・') + '</option>').join('');
   $('vRate').value = pref('rate', '0.9');
+  $('vAccent').value = accent();
   $('vNone').hidden = vs.length > 0;
+  $('vNone').textContent = 'この端末には、' + (accent() === 'ALL' ? '英語' : ACCENTS[accent()][0] + '英語') + 'の声が見つかりませんでした。端末の設定で声を追加すると使えます。';
 }
 if (canSpeak) speechSynthesis.onvoiceschanged = () => { if ($('voiceDlg').open) fillVoices(); };
 
+/* ---------- 発音記号（単語ページだけ） ---------- */
+// 発音辞書 CMUdict（アメリカ英語）から作った一覧を読み込む。読めるまでは記号なしで表示する。
+let IPA = null;
+fetch('ipa.txt').then(r => r.ok ? r.text() : Promise.reject()).then(t => {
+  const m = new Map();
+  for (const line of t.split('\n')){ const i = line.indexOf('\t'); if (i > 0) m.set(line.slice(0, i), line.slice(i + 1)); }
+  IPA = m;
+  if (page === 'words') render();
+}).catch(() => {});
+// 複数の語からなるものは1語ずつ引いて並べる。1語でも辞書になければ出さない。
+function ipaOf(it){
+  if (!IPA || it.page !== 'words') return '';
+  const words = spoken(it.en).toLowerCase().split(/[^a-z]+/).filter(w => w && !(w.length === 1 && 'ab'.includes(w) && /\b[AB]\b/.test(it.en)));
+  const out = words.map(w => IPA.get(w));
+  return words.length && out.every(Boolean) ? '/' + out.join(' ') + '/' : '';
+}
+
 /* ---------- 例文を自動で入れる（ネット接続が必要） ---------- */
 // 無料の例文集 Tatoeba から探し、なければ無料の英語辞書から探す。押すたびに別の文を出す。
-async function findExample(en){
+async function findExample(en, now){
   const words = spoken(en).split(' ').filter(Boolean);
   const core = words.filter(w => w !== 'A' && w !== 'B');          // identify A with B → identify with
   if (!core.length) return '';
   const q = core.length === words.length ? '"' + core.join(' ') + '"' : core.join(' ');
-  const now = $('fEx').value.trim();
   const ok = t => t && t.length <= 140 && t !== now;
   const r = await fetch('https://api.tatoeba.org/unstable/sentences?lang=eng&sort=random&limit=20&word_count=6-14&q=' + encodeURIComponent(q));
   if (r.ok){
@@ -313,7 +344,7 @@ $('autoEx').addEventListener('click', async () => {
   if (!en){ msg.textContent = '先に英語を入力してください。'; return; }
   $('autoEx').disabled = true; msg.textContent = '探しています…';
   try {
-    const ex = await findExample(en);
+    const ex = await findExample(en, $('fEx').value.trim());
     if (ex){ $('fEx').value = ex; msg.textContent = '気に入らなければ、もう一度押すと別の文になります。'; }
     else msg.textContent = '例文が見つかりませんでした。自分で入力してください。';
   } catch(e){
@@ -321,6 +352,25 @@ $('autoEx').addEventListener('click', async () => {
   }
   $('autoEx').disabled = false;
 });
+
+// カードの例文をその場で入れ替える。入れ替えた文は保存し、すぐ読み上げる。
+function setExample(it, ex){
+  if (it.custom){ const c = state.custom.find(x => x.id === it.id); if (c) c.ex = ex; }
+  else state.edits[it.id] = Object.assign({}, state.edits[it.id], {ex});   // ex が空なら最初の例文に戻る
+  save();
+}
+async function swapExample(it, btn){
+  const msg = btn.parentNode.querySelector('.exmsg'), label = btn.textContent;
+  btn.disabled = true; btn.textContent = '探しています…'; msg.textContent = '';
+  try {
+    const ex = await findExample(it.en, it.ex || EX[it.id] || '');
+    if (ex){ setExample(it, ex); render(); speak(ex); return; }
+    msg.textContent = '別の例文が見つかりませんでした。';
+  } catch(e){
+    msg.textContent = 'ネットにつながっていないようです。';
+  }
+  btn.disabled = false; btn.textContent = label;
+}
 
 /* ---------- つづりの確認（追加・編集画面の「もしかして」） ---------- */
 // 辞書は追加画面を初めて開いたときに読み込む。読めなければ何も出さない（追加はふつうにできる）。
@@ -448,19 +498,24 @@ function rowHtml(it){
   if (it.type) badges += '<span class="badge" title="' + esc(TYPES[it.type]) + '">' + TYPE_MARK[it.type] + '</span>';
   if (it.dup) badges += '<span class="badge">' + esc(it.dup) + '回登場</span>';
   const orig = it.orig ? '<small>メモのつづり：' + esc(it.orig) + '</small>' : '';
+  const ipa = ipaOf(it), ipaHtml = ipa ? '<small class="ipa">' + esc(ipa) + '</small>' : '';
   let q, a;
   if (rev){
     const [hint, rest] = hintSplit(it);
     q = '<div class="en q-ja">' + esc(it.ja) + badges + '</div>';
-    a = '<span><i class="hint">' + esc(hint) + '</i><i class="rest">' + esc(rest) + '</i></span>' + orig;
+    a = '<span><i class="hint">' + esc(hint) + '</i><i class="rest">' + esc(rest) + '</i></span>' + ipaHtml + orig;
   } else {
     q = '<div class="en">' + esc(it.en) + badges + orig + '</div>';
-    a = '<span>' + esc(it.ja) + '</span>';
+    a = '<span>' + esc(it.ja) + '</span>' + ipaHtml;
   }
   const ex = it.ex || EX[it.id] || '';
   const exHtml = '<div class="ex">' + (ex ? '<p>' + esc(ex) + '</p>' : '') +
     '<button type="button" class="say" data-say="w">🔊 単語</button>' +
-    (ex ? '<button type="button" class="say" data-say="e">🔊 例文</button>' : '') + '</div>';
+    (ex ? '<button type="button" class="say" data-say="e">🔊 例文</button>' : '') +
+    '<button type="button" class="swap">🔄 別の例文</button>' +
+    '<button type="button" class="voice">🗣 声を変える</button>' +
+    (!it.custom && it.ex && EX[it.id] && it.ex !== EX[it.id] ? '<button type="button" class="orig">↩ 元の例文</button>' : '') +
+    '<span class="note exmsg"></span></div>';
   return '<li class="row' + (rev ? ' rv' : '') + (shown ? ' open' : '') + (state.learned[it.id] ? ' learned' : '') + '" data-id="' + esc(it.id) + '">' + q +
     '<button type="button" class="ja' + (rev ? ' rev' : '') + (shown ? ' show' : '') + '" aria-label="答えを表示・非表示">' + a + '</button>' +
     '<label class="chk"><input type="checkbox" aria-label="覚えた"' + (state.learned[it.id] ? ' checked' : '') + '></label>' +
@@ -477,6 +532,7 @@ function render(){
   $('onlyTodo').setAttribute('aria-pressed', onlyTodo);
   $('dirBtn').setAttribute('aria-pressed', dir === 'ja');
   $('dirBtn').textContent = dir === 'ja' ? '日→英' : '英→日';
+  $('accentBtn').textContent = '発音：' + ACCENTS[accent()][0];
   $('shuffle').setAttribute('aria-pressed', !!order);
 
   const vis = visible(all);
@@ -541,6 +597,25 @@ $('list').addEventListener('click', e => {
     const on = !ja.classList.contains('show');
     ja.classList.toggle('show', on); row.classList.toggle('open', on);
     if (on) revealed.add(id); else { revealed.delete(id); if (showAll){ showAll = false; itemsOf(page).forEach(it => { if (it.id !== id) revealed.add(it.id); }); } }
+    return;
+  }
+  if (e.target.closest('button.voice')){
+    // 次の声に切り替えて、その声ですぐ読む
+    const it = itemsOf(page).find(x => x.id === id), vs = englishVoices(), msg = row.querySelector('.exmsg');
+    if (!it) return;
+    if (vs.length < 2){ msg.textContent = accent() === 'ALL' ? 'この端末には、切り替えられる英語の声がありません。' : 'この端末の' + ACCENTS[accent()][0] + '英語の声は' + (vs.length ? '1つだけ' : '見つかりません') + 'でした。上の「発音」を「すべて」にすると、ほかの国の声も使えます。'; if (vs.length) speak(it.ex || EX[it.id] || spoken(it.en)); return; }
+    const cur = pref('voice', '') || vs[0].name;
+    const v = vs[(vs.findIndex(x => x.name === cur) + 1) % vs.length];
+    setPref('voice', v.name);
+    msg.textContent = '声：' + v.name + '（' + [gender(v), v.lang.replace('_', '-')].filter(Boolean).join('・') + '）';
+    speak(it.ex || EX[it.id] || spoken(it.en));
+    return;
+  }
+  const swap = e.target.closest('button.swap'), back = e.target.closest('button.orig');
+  if (swap || back){
+    const it = itemsOf(page).find(x => x.id === id); if (!it) return;
+    if (back){ setExample(it, ''); render(); return; }
+    swapExample(it, swap);
     return;
   }
   const say = e.target.closest('button.say');
@@ -655,6 +730,13 @@ $('importFile').addEventListener('change', async e => {
 
 $('voiceBtn').hidden = !canSpeak;
 $('voiceBtn').addEventListener('click', () => { fillVoices(); $('voiceDlg').showModal(); });
+$('accentBtn').hidden = !canSpeak;
+$('accentBtn').addEventListener('click', () => {
+  const keys = Object.keys(ACCENTS);
+  setPref('accent', keys[(keys.indexOf(accent()) + 1) % keys.length]);
+  render();
+});
+$('vAccent').addEventListener('change', () => { setPref('accent', $('vAccent').value); fillVoices(); render(); });
 $('vSel').addEventListener('change', () => setPref('voice', $('vSel').value));
 $('vRate').addEventListener('change', () => setPref('rate', $('vRate').value));
 $('vTest').addEventListener('click', () => speak('The meeting has been moved to three o\'clock on Friday.'));

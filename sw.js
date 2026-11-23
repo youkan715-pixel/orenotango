@@ -1,6 +1,6 @@
 // オフライン対応。まず保存済みを返し、裏で新しい版を取りに行く。
-const CACHE = 'tango-v4';
-const FILES = ['./', 'index.html', 'data.js', 'examples.js', 'dict.txt', 'manifest.json', 'icon.svg', 'icon.png'];
+const CACHE = 'tango-v5';
+const FILES = ['./', 'index.html', 'data.js', 'examples.js', 'dict.txt', 'ipa.txt', 'manifest.json', 'icon.svg', 'icon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
 });
