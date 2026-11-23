@@ -853,11 +853,18 @@ const PS = typeof PASSAGES === 'undefined' ? [] : PASSAGES;
 const SRC = {words: '単語', idioms: 'イディオム', nouns: '複合名詞'};
 // stage: pick（選ぶ）→ run（聞く・読む）→ review（答え合わせ）
 // 読み上げは1文ずつ。cur = いま読んでいる（次に読む）文の番号。巻き戻しや頭出しは文の単位で行う。
-const R = {src: 'words', group: '', mode: 'listen', stage: 'pick', p: null, ans: [], t0: 0, secs: 0, showText: false, showJa: false, playing: false, tip: '', timer: 0, play: 0, sents: [], cur: 0};
-const pool = () => PS.filter(p => p.page === R.src && (!R.group || p.group === R.group));
+const R = {srcs: ['words'], group: '', mode: 'listen', stage: 'pick', p: null, ans: [], t0: 0, secs: 0, showText: false, showJa: false, playing: false, tip: '', timer: 0, play: 0, sents: [], cur: 0, perm: []};
+// srcs = 選んだ種類（複数可）。group は「種類|グループ名」で持つ（種類が違っても同じ名前がありうるため）。
+// 1本の長文が複数のグループにまたがることがある（語の少ない動詞をまとめた長文など）
+const groupsOf = p => [].concat(p.group);
+const gl = p => groupsOf(p).join('・');
+const gkeys = p => groupsOf(p).map(g => p.page + '|' + g);
+const pool = () => PS.filter(p => R.srcs.includes(p.page) && (!R.group || gkeys(p).includes(R.group)));
 const wordsIn = p => p.text.trim().split(/\s+/).length;
 const resultOf = p => (state.reading || {})[p.id];
-const sentencesOf = text => (text.match(/[^.!?]+[.!?]+["']?\s*/g) || [text]).map(t => t.trim()).filter(Boolean);
+// Mr. や Dr. の点では文を切らない（いったん別の記号に置き換えてから切り、あとで戻す）
+const sentencesOf = text => (text.replace(/\b(Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr)\./g, '$1\u0000').match(/[^.!?]+[.!?]+["']?\s*/g) || [text])
+  .map(t => t.replace(/\u0000/g, '.').trim()).filter(Boolean);
 function resultText(p){
   const r = resultOf(p); if (!r) return '';
   return '済 ' + r.score + '/' + r.n + (r.wpm ? '・' + r.wpm + '語/分' : '');
@@ -918,24 +925,27 @@ const jaHtml = p => '<div class="ractions"><button type="button" class="btn" dat
   (R.showJa ? '<p class="rja">' + esc(p.ja) + '</p>' : '');
 function questionsHtml(p, review){
   return p.qs.map((q, i) => '<fieldset class="q"><legend>' + (i + 1) + '. ' + esc(q.q) + '</legend>' +
-    q.o.map((o, j) => {
-      const cls = review ? (j === q.a ? ' class="ok"' : R.ans[i] === j ? ' class="ng"' : '') : '';
+    // 選択肢は出題のたびに並べ替える（正解の位置を覚えてしまわないように）。j は元の番号、k は表示上の位置。
+    (R.perm[i] || [0, 1, 2, 3]).map((j, k) => {
+      const o = q.o[j], cls = review ? (j === q.a ? ' class="ok"' : R.ans[i] === j ? ' class="ng"' : '') : '';
       return '<label' + cls + '><input type="radio" name="q' + i + '" value="' + j + '"' + (R.ans[i] === j ? ' checked' : '') + (review ? ' disabled' : '') + '>' +
-        '<span>(' + 'ABCD'[j] + ') ' + esc(o) + (review && j === q.a ? '　← 正解' : '') + '</span></label>';
+        '<span>(' + 'ABCD'[k] + ') ' + esc(o) + (review && j === q.a ? '　← 正解' : '') + '</span></label>';
     }).join('') + (review ? '<p class="why">' + esc(q.why) + '</p>' : '') + '</fieldset>').join('');
 }
 function renderReading(){
   const box = $('reading'), p = R.p;
   let h = '';
   if (R.stage === 'pick'){
-    const groups = [...new Set(PS.filter(x => x.page === R.src).map(x => x.group))];
+    const multi = R.srcs.length > 1;
+    const groups = [...new Set(PS.filter(x => R.srcs.includes(x.page)).flatMap(gkeys))];
     if (R.group && !groups.includes(R.group)) R.group = '';
+    const gname = k => { const i = k.indexOf('|'); return (multi ? SRC[k.slice(0, i)] + '｜' : '') + k.slice(i + 1); };
     const list = pool(), done = list.filter(resultOf).length;
     h = '<div class="rcard"><h2>長文でリスニング・速読</h2>' +
-      '<h3>どの語から？</h3><div class="seg">' + Object.keys(SRC).map(k =>
-        '<button type="button" class="btn" data-act="src" data-v="' + k + '" aria-pressed="' + (R.src === k) + '">' + SRC[k] + '</button>').join('') + '</div>' +
+      '<h3>どの語から？（複数選べます）</h3><div class="seg">' + Object.keys(SRC).map(k =>
+        '<button type="button" class="btn" data-act="src" data-v="' + k + '" aria-pressed="' + R.srcs.includes(k) + '">' + SRC[k] + '</button>').join('') + '</div>' +
       '<h3>グループ</h3><select id="rGroup" aria-label="グループ"><option value="">ランダム（全グループから）</option>' +
-        groups.map(g => '<option' + (g === R.group ? ' selected' : '') + '>' + esc(g) + '</option>').join('') + '</select>' +
+        groups.map(g => '<option value="' + esc(g) + '"' + (g === R.group ? ' selected' : '') + '>' + esc(gname(g)) + '</option>').join('') + '</select>' +
       '<h3>練習</h3><div class="seg">' +
         '<button type="button" class="btn" data-act="mode" data-v="listen" aria-pressed="' + (R.mode === 'listen') + '">リスニング</button>' +
         '<button type="button" class="btn" data-act="mode" data-v="speed" aria-pressed="' + (R.mode === 'speed') + '">速読</button></div>' +
@@ -946,9 +956,9 @@ function renderReading(){
       (R.mode === 'listen' && !canSpeak ? '<p class="note">この端末は読み上げに対応していないため、リスニングは使えません。</p>' : '') +
       '</div>' +
       (list.length ? '<div class="rcard"><h2>長文の一覧</h2><ul class="rlist">' + list.map(x =>
-        '<li><span>' + esc(x.group) + '｜' + esc(x.kind) + '（' + wordsIn(x) + '語）</span><span class="res">' + (resultText(x) || '未') + '</span></li>').join('') + '</ul></div>' : '');
+        '<li><span>' + (multi ? SRC[x.page] + '｜' : '') + esc(gl(x)) + '｜' + esc(x.kind) + '（' + wordsIn(x) + '語）</span><span class="res">' + (resultText(x) || '未') + '</span></li>').join('') + '</ul></div>' : '');
   } else if (R.stage === 'run'){
-    const head = '<h2>' + (R.mode === 'listen' ? 'リスニング' : '速読') + '｜' + esc(p.group) + '｜' + esc(p.kind) + '</h2>';
+    const head = '<h2>' + (R.mode === 'listen' ? 'リスニング' : '速読') + '｜' + esc(gl(p)) + '｜' + esc(p.kind) + '</h2>';
     if (R.mode === 'listen'){
       h = '<div class="rcard">' + head + '<p class="note">発音・声・速さは下の「声」から変えられます。</p>' + playerHtml() +
         '<div class="ractions"><button type="button" class="btn" data-act="text">' + (R.showText ? '本文を隠す' : '本文を表示') + '</button></div>' +
@@ -972,7 +982,7 @@ function renderReading(){
     }
   } else {
     const r = resultOf(p) || {score: 0, n: p.qs.length};
-    h = '<div class="rcard"><h2>結果｜' + esc(p.group) + '｜' + esc(p.kind) + '</h2>' +
+    h = '<div class="rcard"><h2>結果｜' + esc(gl(p)) + '｜' + esc(p.kind) + '</h2>' +
       '<p class="rscore">' + r.n + ' 問中 ' + r.score + ' 問 正解' + (r.wpm ? '　' + r.wpm + ' 語/分' : '') + '</p>' +
       '<div class="ractions"><button type="button" class="btn primary" data-act="next">次の長文</button><button type="button" class="btn" data-act="quit">選ぶ画面へ</button></div></div>' +
       '<div class="rcard"><h2>設問と解説</h2>' + questionsHtml(p, true) + '</div>' +
@@ -988,7 +998,8 @@ function startPassage(){
   const from = fresh.length ? fresh : (list.length > 1 ? list.filter(x => x !== R.p) : list);
   stopReading();
   const p = from[Math.floor(Math.random() * from.length)];
-  Object.assign(R, {p, stage: 'run', ans: [], t0: 0, secs: 0, showText: false, showJa: false, tip: '', sents: sentencesOf(p.text), cur: 0});
+  Object.assign(R, {p, stage: 'run', ans: [], t0: 0, secs: 0, showText: false, showJa: false, tip: '', sents: sentencesOf(p.text), cur: 0,
+    perm: p.qs.map(() => { const a = [0, 1, 2, 3]; for (let i = 3; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; })});
   renderReading(); window.scrollTo(0, 0);
 }
 $('reading').addEventListener('input', e => { if (e.target.id === 'rSeek') $('rPos').textContent = posText(+e.target.value); });
@@ -1000,7 +1011,12 @@ $('reading').addEventListener('change', e => {
 $('reading').addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const act = b.dataset.act, p = R.p;
-  if (act === 'src'){ R.src = b.dataset.v; R.group = ''; }
+  if (act === 'src'){
+    // 押すたびに選ぶ・外すを切り替える。最後の1つは外せない。
+    const v = b.dataset.v, on = R.srcs.includes(v);
+    if (on && R.srcs.length === 1) return;
+    R.srcs = Object.keys(SRC).filter(k => k === v ? !on : R.srcs.includes(k));
+  }
   else if (act === 'mode') R.mode = b.dataset.v;
   else if (act === 'start' || act === 'next'){ startPassage(); return; }
   else if (act === 'quit'){ stopReading(); R.stage = 'pick'; R.p = null; }
