@@ -62,8 +62,8 @@ button{cursor:pointer}
 header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);
   padding:calc(8px + env(safe-area-inset-top)) 12px 8px}
 .wrap{max-width:860px;margin:0 auto}
-.tabs{display:flex;gap:6px}
-.tabs button{flex:1;padding:10px 2px;font-size:15px;border:1px solid var(--line);background:var(--card);
+.tabs{display:flex;gap:4px}
+.tabs button{flex:1 1 0;min-width:0;padding:6px 1px;font-size:clamp(11px,3.3vw,15px);line-height:1.25;word-break:keep-all;border:1px solid var(--line);background:var(--card);
   border-radius:10px;font-weight:600;min-height:44px}
 .tabs button[aria-selected="true"]{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 .tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
@@ -161,9 +161,10 @@ dialog textarea{min-height:72px;resize:vertical}
 <header>
   <div class="wrap">
     <div class="tabs" role="tablist">
-      <button role="tab" data-page="words">単語</button>
+      <button role="tab" data-page="freq">頻出<wbr>単語</button>
+      <button role="tab" data-page="words">間違えた<wbr>単語</button>
       <button role="tab" data-page="idioms">イディオム</button>
-      <button role="tab" data-page="nouns">複合名詞</button>
+      <button role="tab" data-page="nouns">複合<wbr>名詞</button>
       <button role="tab" data-page="reading">長文</button>
     </div>
     <div class="tools">
@@ -240,6 +241,7 @@ dialog textarea{min-height:72px;resize:vertical}
 
 <script src="data.js"></script>
 <script src="examples.js"></script>
+<script src="freq.js"></script>
 <script src="passages.js"></script>
 <script>
 'use strict';
@@ -248,7 +250,9 @@ const TYPES = {
   4:'④ 動詞＋副詞＋前置詞', 5:'⑤ 動詞＋A＋前置詞＋B'
 };
 const TYPE_MARK = {1:'①',2:'②',3:'③',4:'④',5:'⑤'};
-const PAGES = ['words','idioms','nouns'];
+const PAGES = ['freq','words','idioms','nouns'];
+const LABEL = {freq: '頻出単語', words: '間違えた単語', idioms: 'イディオム', nouns: '複合名詞'};
+const hasIpa = p => p === 'words' || p === 'freq';
 const ADDED = '自分で追加';
 const KEY = 'tango-v1';
 const $ = id => document.getElementById(id);
@@ -281,6 +285,7 @@ function idiomGroups(items){
   }
 }
 const BASE = {
+  freq: parseGrouped('freq', FREQ),
   words: parseGrouped('words', WORDS),
   idioms: parseIdioms(IDIOMS),
   nouns: parseGrouped('nouns', NOUNS)
@@ -370,11 +375,11 @@ fetch('ipa.txt').then(r => r.ok ? r.text() : Promise.reject()).then(t => {
   const m = new Map();
   for (const line of t.split('\n')){ const i = line.indexOf('\t'); if (i > 0) m.set(line.slice(0, i), line.slice(i + 1)); }
   IPA = m;
-  if (page === 'words') render();
+  if (hasIpa(page)) render();
 }).catch(() => {});
 // 複数の語からなるものは1語ずつ引いて並べる。1語でも辞書になければ出さない。
 function ipaOf(it){
-  if (!IPA || it.page !== 'words') return '';
+  if (!IPA || !hasIpa(it.page)) return '';
   const words = spoken(it.en).toLowerCase().split(/[^a-z]+/).filter(w => w && !(w.length === 1 && 'ab'.includes(w) && /\b[AB]\b/.test(it.en)));
   const out = words.map(w => IPA.get(w));
   return words.length && out.every(Boolean) ? '/' + out.join(' ') + '/' : '';
@@ -528,6 +533,9 @@ let dir = 'en'; // 'en' = 英語を見て日本語を答える / 'ja' = 日本�
 try { if (localStorage.getItem(KEY + '-dir') === 'ja') dir = 'ja'; } catch(e){}
 const revealed = new Set(), collapsed = new Set();
 
+// 「間違えた単語」にある語。頻出単語のページで印を付けるのに使う。
+let MINE = null;
+function mine(){ return MINE || (MINE = new Set(itemsOf('words').map(it => it.en.toLowerCase()))); }
 function itemsOf(p){
   const base = BASE[p].filter(it => !state.deleted[it.id]).map(it => Object.assign({}, it, state.edits[it.id] || {}));
   const all = base.concat(state.custom.filter(c => c.page === p).map(c => Object.assign({custom: true}, c)));
@@ -560,6 +568,7 @@ function rowHtml(it){
   const shown = showAll || revealed.has(it.id), rev = dir === 'ja';
   let badges = '';
   if (it.type) badges += '<span class="badge" title="' + esc(TYPES[it.type]) + '">' + TYPE_MARK[it.type] + '</span>';
+  if (it.page === 'freq' && mine().has(it.en.toLowerCase())) badges += '<span class="badge">間違えた単語にもある</span>';
   if (it.dup) badges += '<span class="badge">' + esc(it.dup) + '回登場</span>';
   const orig = it.orig ? '<small>メモのつづり：' + esc(it.orig) + '</small>' : '';
   const ipa = ipaOf(it), ipaHtml = ipa ? '<small class="ipa">' + esc(ipa) + '</small>' : '';
@@ -594,6 +603,7 @@ function render(){
     document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.page === page));
     renderReading(); return;
   }
+  MINE = null;
   const all = itemsOf(page), names = groupNames(all);
   // グループの選択肢
   const cur = $('groupSel').value;
@@ -638,6 +648,7 @@ function render(){
         '<ul class="rows">' + inG.map(rowHtml).join('') + '</ul></details>';
     }
   }
+  if (page === 'freq') html += '<p class="note">語の一覧と順番：TOEIC Service List 1.2（Browne, C. &amp; Culligan, B., 2016, www.newgeneralservicelist.com）CC BY-SA 4.0。和訳と例文はこのアプリで付けたものです。</p>';
   $('list').innerHTML = html;
 }
 
@@ -738,7 +749,7 @@ $('fGroupSel').addEventListener('change', () => { syncGroupInput(); if (!$('fGro
 function openDialog(id){
   const all = itemsOf(page);
   editing = id ? all.find(it => it.id === id) : null;
-  const label = {words:'単語', idioms:'イディオム', nouns:'複合名詞'}[page];
+  const label = page === 'words' ? '単語' : LABEL[page];
   $('dlgTitle').textContent = label + (editing ? 'を編集' : 'を追加');
   $('fEn').value = editing ? editing.en : '';
   $('fJa').value = editing ? editing.ja : '';
@@ -776,7 +787,7 @@ $('form').addEventListener('submit', () => {
   const v = {en, ja, ex: $('fEx').value.trim()};
   const typed = $('fGroup').value.trim(), sel = $('fGroupSel').value;
   if (page === 'words') v.group = typed || ADDED;
-  else if (page === 'nouns') v.group = sel === NEW_GROUP ? (typed || ADDED) : sel;
+  else if (page !== 'idioms') v.group = sel === NEW_GROUP ? (typed || ADDED) : sel;
   else { v.type = +$('fType').value; v.g = sel === NEW_GROUP ? typed : sel; }
   if (!editing){
     state.custom.push(Object.assign({id: 'c' + Date.now() + Math.floor(Math.random() * 1000), page}, v));
@@ -850,10 +861,12 @@ $('markBtn').addEventListener('click', () => {
 
 /* ---------- 長文（リスニング・速読） ---------- */
 const PS = typeof PASSAGES === 'undefined' ? [] : PASSAGES;
-const SRC = {words: '単語', idioms: 'イディオム', nouns: '複合名詞'};
+const SRC = LABEL;
 // stage: pick（選ぶ）→ run（聞く・読む）→ review（答え合わせ）
 // 読み上げは1文ずつ。cur = いま読んでいる（次に読む）文の番号。巻き戻しや頭出しは文の単位で行う。
-const R = {srcs: ['words'], group: '', mode: 'listen', stage: 'pick', p: null, ans: [], t0: 0, secs: 0, showText: false, showJa: false, playing: false, tip: '', timer: 0, play: 0, sents: [], cur: 0, perm: []};
+// 長文が1本もない種類は、選ぶボタンを出さない（配布用では単語の長文がないため）
+const SRCKEYS = Object.keys(SRC).filter(k => PS.some(p => p.page === k));
+const R = {srcs: SRCKEYS.slice(0, 1), group: '', mode: 'listen', stage: 'pick', p: null, ans: [], t0: 0, secs: 0, showText: false, showJa: false, playing: false, tip: '', timer: 0, play: 0, sents: [], cur: 0, perm: []};
 // srcs = 選んだ種類（複数可）。group は「種類|グループ名」で持つ（種類が違っても同じ名前がありうるため）。
 // 1本の長文が複数のグループにまたがることがある（語の少ない動詞をまとめた長文など）
 const groupsOf = p => [].concat(p.group);
@@ -942,7 +955,7 @@ function renderReading(){
     const gname = k => { const i = k.indexOf('|'); return (multi ? SRC[k.slice(0, i)] + '｜' : '') + k.slice(i + 1); };
     const list = pool(), done = list.filter(resultOf).length;
     h = '<div class="rcard"><h2>長文でリスニング・速読</h2>' +
-      '<h3>どの語から？（複数選べます）</h3><div class="seg">' + Object.keys(SRC).map(k =>
+      '<h3>どの語から？（複数選べます）</h3><div class="seg">' + SRCKEYS.map(k =>
         '<button type="button" class="btn" data-act="src" data-v="' + k + '" aria-pressed="' + R.srcs.includes(k) + '">' + SRC[k] + '</button>').join('') + '</div>' +
       '<h3>グループ</h3><select id="rGroup" aria-label="グループ"><option value="">ランダム（全グループから）</option>' +
         groups.map(g => '<option value="' + esc(g) + '"' + (g === R.group ? ' selected' : '') + '>' + esc(gname(g)) + '</option>').join('') + '</select>' +
@@ -1015,7 +1028,7 @@ $('reading').addEventListener('click', e => {
     // 押すたびに選ぶ・外すを切り替える。最後の1つは外せない。
     const v = b.dataset.v, on = R.srcs.includes(v);
     if (on && R.srcs.length === 1) return;
-    R.srcs = Object.keys(SRC).filter(k => k === v ? !on : R.srcs.includes(k));
+    R.srcs = SRCKEYS.filter(k => k === v ? !on : R.srcs.includes(k));
   }
   else if (act === 'mode') R.mode = b.dataset.v;
   else if (act === 'start' || act === 'next'){ startPassage(); return; }
