@@ -65,6 +65,7 @@ header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px so
 .tabs{display:flex;gap:4px}
 .tabs button{flex:1 1 0;min-width:0;padding:6px 1px;font-size:clamp(11px,3.3vw,15px);line-height:1.25;word-break:keep-all;border:1px solid var(--line);background:var(--card);
   border-radius:10px;font-weight:600;min-height:44px}
+@media (max-width:560px){.tabs{flex-wrap:wrap}.tabs button{flex:1 1 30%;min-height:38px;font-size:13px}}
 .tabs button[aria-selected="true"]{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
 .tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
 .tools #accentSel{flex:0 0 auto;padding:8px 10px}
@@ -168,6 +169,7 @@ dialog textarea{min-height:72px;resize:vertical}
       <button role="tab" data-page="freq">頻出<wbr>単語</button>
       <button role="tab" data-page="words">間違えた<wbr>単語</button>
       <button role="tab" data-page="idioms">イディオム</button>
+      <button role="tab" data-page="colls">コロケー<wbr>ション</button>
       <button role="tab" data-page="nouns">複合<wbr>名詞</button>
       <button role="tab" data-page="reading">長文</button>
     </div>
@@ -215,6 +217,7 @@ dialog textarea{min-height:72px;resize:vertical}
     <div class="auto-ex"><button type="button" class="btn" id="autoEx">例文を自動で入れる</button><span class="note" id="autoExMsg"></span></div>
     <label id="fGroupWrap">グループ<select id="fGroupSel"></select><input id="fGroup" autocomplete="off" placeholder="新しいグループの名前" aria-label="新しいグループの名前"></label>
     <label id="fTypeWrap">型<select id="fType"></select></label>
+    <label id="fFormWrap">形<select id="fForm"></select></label>
     <div id="fPosWrap"><span>品詞（選ばなければ自動）</span><div class="posbox" id="fPos"></div></div>
     <p class="note" id="dlgNote"></p>
     <div class="dlg-actions">
@@ -250,6 +253,7 @@ dialog textarea{min-height:72px;resize:vertical}
 <script src="examples.js"></script>
 <script src="freq.js"></script>
 <script src="pos.js"></script>
+<script src="colls.js"></script>
 <script src="passages.js"></script>
 <script>
 'use strict';
@@ -258,8 +262,11 @@ const TYPES = {
   4:'④ 動詞＋副詞＋前置詞', 5:'⑤ 動詞＋A＋前置詞＋B'
 };
 const TYPE_MARK = {1:'①',2:'②',3:'③',4:'④',5:'⑤'};
-const PAGES = ['freq','words','idioms','nouns'];
-const LABEL = {freq: '頻出単語', words: '間違えた単語', idioms: 'イディオム', nouns: '複合名詞'};
+const PAGES = ['freq','words','idioms','colls','nouns'];
+const LABEL = {freq: '頻出単語', words: '間違えた単語', idioms: 'イディオム', colls: 'コロケーション', nouns: '複合名詞'};
+// コロケーションの形。記号は colls.js と同じ。
+const FORM_NAME = {v: '動詞＋名詞', a: '形容詞＋名詞', d: '副詞を含む形', p: '動詞＋前置詞', r: '前置詞で始まる形'};
+const NO_FORM = '形なし';
 // 品詞。記号は pos.js と同じ。
 const POS_NAME = {n: '名詞', v: '動詞', a: '形容詞', d: '副詞', r: '前置詞', c: '接続詞', k: '代名詞', i: '間投詞', p: '熟語'};
 const POS_MARK = {n: '名', v: '動', a: '形', d: '副', r: '前', c: '接', k: '代', i: '間', p: '熟'};
@@ -298,10 +305,20 @@ function idiomGroups(items){
     it.group = it.g || (n[v] > 1 ? v : 'その他 ' + TYPES[it.type]); // g = 自分で選んだグループ
   }
 }
+function parseColls(text){
+  let g = ''; const out = [];
+  for (const l of lines(text)){
+    if (l.startsWith('# ')){ g = l.slice(2); continue; }
+    const [en, ja, form] = l.split('|');
+    out.push({id: 'colls:' + en, page: 'colls', group: g, en, ja, form});
+  }
+  return out;
+}
 const BASE = {
   freq: parseGrouped('freq', FREQ),
   words: parseGrouped('words', WORDS),
   idioms: parseIdioms(IDIOMS),
+  colls: parseColls(COLLS),
   nouns: parseGrouped('nouns', NOUNS)
 };
 
@@ -565,8 +582,8 @@ function groupNames(items){
   }
   return seen;
 }
-// 見出しを品詞にするか（頻出単語・間違えた単語だけ）
-function groupByPos(){ return hasIpa(page) && pref('bypos', 'off') === 'on'; }
+// 見出しを品詞にするか（頻出単語・間違えた単語）、形にするか（コロケーション）
+function groupByPos(){ return hasIpa(page) ? pref('bypos', 'off') === 'on' : page === 'colls' && pref('byform', 'off') === 'on'; }
 function visible(items){
   const q = $('q').value.trim().toLowerCase(), byPos = groupByPos(), g = byPos ? '' : $('groupSel').value, t = $('typeSel').value;
   const ps = hasIpa(page) ? $('posSel').value : '';
@@ -577,9 +594,9 @@ function visible(items){
     (!onlyTodo || !state.learned[it.id]) &&
     (!q || it.en.toLowerCase().includes(q) || it.ja.toLowerCase().includes(q)));
 }
-// 日→英のときのヒント。イディオムは先頭の動詞、それ以外は最初の1文字だけ見せる。
+// 日→英のときのヒント。イディオムとコロケーションは先頭の1語、それ以外は最初の1文字だけ見せる。
 function hintSplit(it){
-  if (it.page === 'idioms'){ const i = it.en.indexOf(' '); return i < 0 ? [it.en, ''] : [it.en.slice(0, i), it.en.slice(i)]; }
+  if (it.page === 'idioms' || it.page === 'colls'){ const i = it.en.indexOf(' '); return i < 0 ? [it.en, ''] : [it.en.slice(0, i), it.en.slice(i)]; }
   return [it.en.slice(0, 1), it.en.slice(1)];
 }
 function rowHtml(it){
@@ -629,9 +646,11 @@ function render(){
     names.map(n => '<option' + (n === cur ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
   $('typeSel').hidden = page !== 'idioms';
   const byPos = groupByPos();
-  $('posSel').hidden = $('posBtn').hidden = !hasIpa(page);
+  const isColl = page === 'colls';
+  $('posSel').hidden = !hasIpa(page);
+  $('posBtn').hidden = !hasIpa(page) && !isColl;
   $('groupSel').hidden = byPos;
-  $('posBtn').textContent = '見出し：' + (byPos ? '品詞' : 'グループ');
+  $('posBtn').textContent = '見出し：' + (isColl ? (byPos ? '形' : '場面') : (byPos ? '品詞' : 'グループ'));
   $('posBtn').setAttribute('aria-pressed', byPos);
   document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.page === page));
   $('onlyTodo').setAttribute('aria-pressed', onlyTodo);
@@ -662,8 +681,10 @@ function render(){
     html = '<div class="flat"><ul class="rows">' + sorted.map(rowHtml).join('') + '</ul></div>';
   } else {
     // 見出しが品詞のときは、品詞が2つある語は両方の見出しに出る
-    const heads = byPos ? Object.keys(POS_NAME).map(c => POS_NAME[c]).concat(NO_POS) : names;
-    const inHead = byPos ? (it, n) => { const p = posOf(it); return n === NO_POS ? !p : [...p].some(c => POS_NAME[c] === n); } : (it, n) => it.group === n;
+    const heads = !byPos ? names : isColl ? Object.values(FORM_NAME).concat(NO_FORM) : Object.keys(POS_NAME).map(c => POS_NAME[c]).concat(NO_POS);
+    const inHead = !byPos ? (it, n) => it.group === n
+      : isColl ? (it, n) => (FORM_NAME[it.form] || NO_FORM) === n
+      : (it, n) => { const p = posOf(it); return n === NO_POS ? !p : [...p].some(c => POS_NAME[c] === n); };
     for (const n of heads){
       const inG = vis.filter(it => inHead(it, n));
       if (!inG.length) continue;
@@ -691,7 +712,7 @@ $('groupSel').addEventListener('change', render);
 $('typeSel').addEventListener('change', render);
 $('posSel').innerHTML = '<option value="">すべての品詞</option>' + Object.keys(POS_NAME).map(c => '<option value="' + c + '">' + POS_NAME[c] + '</option>').join('') + '<option value="-">' + NO_POS + '</option>';
 $('posSel').addEventListener('change', render);
-$('posBtn').addEventListener('click', () => { setPref('bypos', groupByPos() ? 'off' : 'on'); render(); });
+$('posBtn').addEventListener('click', () => { setPref(page === 'colls' ? 'byform' : 'bypos', groupByPos() ? 'off' : 'on'); render(); });
 $('dirBtn').addEventListener('click', () => {
   dir = dir === 'ja' ? 'en' : 'ja'; showAll = false; revealed.clear();
   try { localStorage.setItem(KEY + '-dir', dir); } catch(e){}
@@ -786,6 +807,9 @@ function openDialog(id){
   const isIdiom = page === 'idioms';
   $('fTypeWrap').hidden = !isIdiom;
   $('fPosWrap').hidden = !hasIpa(page);
+  $('fFormWrap').hidden = page !== 'colls';
+  $('fForm').innerHTML = '<option value="">選ばない</option>' + Object.keys(FORM_NAME).map(c => '<option value="' + c + '">' + FORM_NAME[c] + '</option>').join('');
+  $('fForm').value = editing && editing.form || '';
   $('fPos').innerHTML = Object.keys(POS_NAME).map(c => '<label><input type="checkbox" value="' + c + '"' + (editing && (editing.pos || '').includes(c) ? ' checked' : '') + '>' + POS_NAME[c] + '</label>').join('');
   // 単語は自由入力。イディオムと複合名詞は今あるグループから選ぶ。
   const pick = page !== 'words';
@@ -816,6 +840,7 @@ $('form').addEventListener('submit', () => {
   const en = $('fEn').value.trim(), ja = $('fJa').value.trim();
   if (!en || !ja) return;
   const v = {en, ja, ex: $('fEx').value.trim()};
+  if (page === 'colls') v.form = $('fForm').value;
   if (hasIpa(page)) v.pos = [...$('fPos').querySelectorAll('input:checked')].map(i => i.value).join('');
   const typed = $('fGroup').value.trim(), sel = $('fGroupSel').value;
   if (page === 'words') v.group = typed || ADDED;
